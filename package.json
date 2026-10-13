@@ -1,0 +1,73 @@
+{
+  "name": "netcup-sdk",
+  "version": "0.1.0",
+  "packageManager": "bun@1.4.2",
+  "description": "Manage Netcup servers from JavaScript or TypeScript with the SCP REST API",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "generate": "openapi-typescript openapi.json -o src/schema.d.ts && prettier --write src/schema.d.ts",
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "format": "prettier --write .",
+    "test": "bun test",
+    "prepublishOnly": "bun run lint && bun run typecheck && bun run build"
+  },
+  "keywords": [
+    "netcup",
+    "scp",
+    "server",
+    "vps",
+    "api-client",
+    "typescript"
+  ],
+  "author": "Gustavo Salomé (gusnips)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gusnips/netcup.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gusnips/netcup/issues"
+  },
+  "homepage": "https://github.com/gusnips/netcup#readme",
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.17.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "^1.4.2",
+    "@types/node": "^26.6.5",
+    "eslint": "^10.12.0",
+    "openapi-typescript": "7.13.0",
+    "prettier": "^3.9.10",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.71.1"
+  }
+}
