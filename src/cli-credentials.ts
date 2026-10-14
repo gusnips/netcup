@@ -54,6 +54,8 @@ export async function loadScpAuth(
     "rememberSecret" | "rememberTokens"
   >,
 ): Promise<Pick<AuthOptions, "accessToken" | "refreshToken" | "onTokens">> {
+  secrets.rememberSecret(env.NETCUP_ACCESS_TOKEN);
+  secrets.rememberSecret(env.NETCUP_REFRESH_TOKEN);
   const { accessToken, refreshToken } = scpEnvironment(env);
   if (accessToken) return { accessToken };
   if (refreshToken) return { refreshToken, onTokens: secrets.rememberTokens };

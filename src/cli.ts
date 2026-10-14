@@ -42,6 +42,7 @@ Commands:
   disks         Read server disks and supported drivers
   metrics       Read CPU, disk and network measurements
   ccp           Read domains and prepare, review or publish DNS changes
+  mcp           Let an AI app read servers, tasks, domains and DNS
 
 Examples:
   netcup login
@@ -57,6 +58,28 @@ Options:
 
 Use netcup GROUP --help for command arguments.
 Results go to stdout as JSON. Progress and errors go to stderr.
+`;
+
+const mcpHelp = `Usage: netcup mcp [--help | --version]
+Let an AI app read Netcup data through MCP over stdio.
+
+The app starts and manages a local process. You do not need a clone, build step or web server.
+Start it from your app with:
+  npx --yes netcup-sdk@${version} mcp
+  bunx netcup-sdk@${version} mcp
+
+For Claude Code:
+  claude mcp add --scope user --transport stdio netcup -- npx --yes netcup-sdk@${version} mcp
+
+Before connecting, sign in outside the MCP process.
+For servers and tasks:
+  npx --yes netcup-sdk@${version} login
+For domains and DNS:
+  npx --yes netcup-sdk@${version} ccp login
+Reconnect the MCP client after changing a saved login.
+
+This mode only reads selected server, task, domain and DNS fields. It cannot change resources, run shell commands or read arbitrary files. Public DNS record types need no login.
+Saved logins and environment credentials work as in the CLI. The process never asks for a secret or browser approval. Stdout is reserved for protocol messages; diagnostics go to stderr.
 `;
 
 function authHelp(command: string, ccp = false): string {
@@ -168,6 +191,27 @@ export async function runCli(
         file: { type: "string" },
       },
     });
+    if (positionals[0] === "mcp") {
+      if (
+        positionals.length !== 1 ||
+        Object.keys(values).some((key) => !["help", "version"].includes(key))
+      )
+        throw new CliUsageError(
+          "Usage: netcup mcp [--help | --version]. This mode accepts no resource arguments or JSON/confirmation flags.",
+        );
+      if (values.version) out(`${version}\n`);
+      else if (values.help) out(mcpHelp);
+      else {
+        const { runMcp } = await import("./mcp");
+        return await runMcp({
+          env,
+          fetch: context.fetch,
+          signal: context.signal,
+          stderr: err,
+        });
+      }
+      return 0;
+    }
     if (values.version) {
       out(`${version}\n`);
       return 0;
