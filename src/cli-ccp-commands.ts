@@ -328,7 +328,7 @@ export async function resolveCcpCommand(
             );
           }
           writeError(
-            `Automatic commit is disabled. No commit request was sent.\nReview the revision with netcup ccp dns review ${domainId} ${revision}.\n`,
+            `Automatic commit is disabled. No commit request was sent.\nReview with:\n  netcup ccp dns review ${domainId} ${revision}\n`,
           );
           return response;
         },
@@ -360,7 +360,7 @@ export async function resolveCcpCommand(
         preview: (client) => readRevision(client, domainId, revision),
         execute: (client) => {
           writeError(
-            `Submitting DNS revision ${revision} for domain ${domainId} for publication...\n`,
+            `Publishing DNS revision ${revision} for domain ${domainId}...\n`,
           );
           return client.ccp.dns.commitRevision(domainId, revision);
         },
