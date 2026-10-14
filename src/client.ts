@@ -1,5 +1,7 @@
 import type { Client } from "openapi-fetch";
 import { NetcupAuth } from "./auth";
+import { NetcupCcpClient } from "./ccp-client";
+import { NetcupAuthError } from "./errors";
 import { createApi, type NetcupConfig } from "./http";
 import { ServersModule } from "./modules/servers";
 import { DisksModule } from "./modules/disks";
@@ -28,6 +30,17 @@ export class NetcupClient {
   readonly tasks: TasksModule;
   readonly users: UsersModule;
   readonly misc: MiscModule;
+  private readonly ccpClient?: NetcupCcpClient;
+
+  get ccp(): NetcupCcpClient {
+    if (!this.ccpClient) {
+      throw new NetcupAuthError(
+        "missing_ccp_config",
+        "Provide CCP configuration as ccp: { apiKey } when creating NetcupClient, or use NetcupCcpClient directly.",
+      );
+    }
+    return this.ccpClient;
+  }
 
   constructor(config: NetcupConfig | string) {
     const options =
@@ -45,5 +58,6 @@ export class NetcupClient {
     this.tasks = new TasksModule(this.api);
     this.users = new UsersModule(this.api);
     this.misc = new MiscModule(this.api);
+    this.ccpClient = options.ccp ? new NetcupCcpClient(options.ccp) : undefined;
   }
 }

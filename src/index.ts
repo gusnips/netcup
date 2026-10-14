@@ -1,4 +1,12 @@
 export { NetcupClient } from "./client";
+export { NetcupCcpClient } from "./ccp-client";
+export type { NetcupCcpConfig } from "./ccp-http";
+export type * from "./modules/ccp/domains";
+export type * from "./modules/ccp/dns";
+export type {
+  paths as CcpPaths,
+  components as CcpComponents,
+} from "./ccp-schema";
 export { NetcupAuth } from "./auth";
 export type * from "./modules/servers";
 export type * from "./modules/disks";

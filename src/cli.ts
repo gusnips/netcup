@@ -1,11 +1,13 @@
 import { parseArgs } from "node:util";
-import { createInterface } from "node:readline/promises";
 import { version } from "../package.json";
 import { NetcupAuth } from "./auth";
 import type { NetcupFetch, NetcupTokens } from "./auth";
 import { NetcupClient } from "./client";
 import { CredentialStore } from "./credentials";
 import { CliUsageError, commandHelp, resolveCommand } from "./cli-commands";
+import type { CliCommand } from "./cli-commands";
+import { ccpCommandHelp, resolveCcpCommand } from "./cli-ccp-commands";
+import { CliCanceledError, confirmAction, promptSecret } from "./cli-prompts";
 import { isRecord, NetcupAuthError, NetcupError } from "./errors";
 
 export interface CliContext {
@@ -15,28 +17,30 @@ export interface CliContext {
   fetch?: NetcupFetch;
   signal?: AbortSignal;
   confirm?: (question: string) => Promise<boolean>;
+  promptSecret?: (question: string) => Promise<string>;
 }
 
 const help = `netcup ${version}
-Manage existing Netcup servers.
+Manage Netcup servers and DNS.
 
 Usage: netcup COMMAND [arguments] [options]
 
 Commands:
-  login         Approve access in your browser and save the login
-  logout        Revoke the saved login and remove it from this machine
+  login         Approve server access in your browser and save the login
+  logout        Revoke the saved server login and remove it from this machine
   auth status   Show which server account is signed in
   servers       Read servers, change settings and control power or rescue mode
   snapshots     Create, read, export, delete or restore snapshots
   tasks         Read work Netcup has accepted, or cancel a task
   disks         Read server disks and supported drivers
   metrics       Read CPU, disk and network measurements
+  ccp           Read domains and prepare, review or publish DNS changes
 
 Examples:
   netcup login
   netcup servers get 12345
-  netcup servers list --limit 20
-  netcup servers reboot 12345 --yes
+  netcup ccp login
+  netcup ccp domains list
 
 Options:
   -h, --help     Show help without signing in
@@ -48,13 +52,18 @@ Use netcup GROUP --help for command arguments.
 Results go to stdout as JSON. Progress and errors go to stderr.
 `;
 
-function authHelp(command: string): string {
-  if (command === "login") {
+function authHelp(command: string, ccp = false): string {
+  if (ccp) {
+    if (command === "login")
+      return "Usage: netcup ccp login\nPaste an API key from CCP > Master Data > API. Input is hidden. The key is checked and saved in a private plaintext file.\n";
+    if (command === "logout")
+      return "Usage: netcup ccp logout\nRemove the local saved key. To revoke it at Netcup, delete the key in CCP > Master Data > API.\n";
+    return "Usage: netcup ccp auth status\nCheck the configured key with a read-only domain request. NETCUP_CCP_API_KEY takes precedence over the saved key.\n";
+  }
+  if (command === "login")
     return "Usage: netcup login\nApprove the device code in your browser. The refresh token is saved in a private plaintext file.\n";
-  }
-  if (command === "logout") {
+  if (command === "logout")
     return "Usage: netcup logout [--local]\nRevoke the saved login before removing its file. --local removes only the local file and does not revoke access.\n";
-  }
   return "Usage: netcup auth status\nRead the signed-in server account. Environment credentials take precedence over the saved login.\n";
 }
 
@@ -68,53 +77,54 @@ function onlyOptions(values: object, allowed: string[]): void {
   }
 }
 
-class CliCanceledError extends Error {}
-
-async function confirmAction(
-  question: string,
-  signal?: AbortSignal,
-): Promise<boolean> {
-  if (!process.stdin.isTTY || !process.stderr.isTTY) {
-    throw new CliUsageError(
-      `${question}\nNo request was sent. Add --yes if you intend to run this action from a script.`,
-    );
-  }
-  const input = createInterface({
-    input: process.stdin,
-    output: process.stderr,
-  });
-  const controller = new AbortController();
-  const cancel = (): void => {
-    controller.abort();
-  };
-  if (signal?.aborted) cancel();
-  signal?.addEventListener("abort", cancel, { once: true });
-  input.once("SIGINT", cancel);
-  try {
-    return (
-      (
-        await input.question(`${question} Type yes to continue: `, {
-          signal: controller.signal,
-        })
-      )
-        .trim()
-        .toLowerCase() === "yes"
-    );
-  } catch (error) {
-    if (controller.signal.aborted) throw new CliCanceledError();
-    throw error;
-  } finally {
-    signal?.removeEventListener("abort", cancel);
-    input.close();
-  }
-}
-
 function taskId(result: unknown): string | undefined {
   if (!isRecord(result)) return undefined;
   if (typeof result.uuid === "string") return result.uuid;
   if (isRecord(result.taskInfo) && typeof result.taskInfo.uuid === "string")
     return result.taskInfo.uuid;
   return undefined;
+}
+
+function ccpAuthenticationError(error: NetcupError): boolean {
+  return (
+    isRecord(error.body) &&
+    Array.isArray(error.body.errors) &&
+    error.body.errors.some(
+      (item) => isRecord(item) && item.code === "authenticationError",
+    )
+  );
+}
+
+function apiKey(value: string): string {
+  const key = value.trim();
+  if (!key || !/^[!-~]+$/.test(key)) {
+    throw new CliUsageError(
+      "The CCP API key is empty or contains spaces, line breaks or unsupported characters. Copy it again from CCP > Master Data > API.",
+    );
+  }
+  return key;
+}
+
+function terminalSafe(text: string): string {
+  return text.replace(/\p{Cc}/gu, (character) =>
+    character === "\n" || character === "\t"
+      ? character
+      : `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+function redactJson(value: unknown, redact: (text: string) => string): unknown {
+  if (typeof value === "string") return redact(value);
+  if (Array.isArray(value))
+    return value.map((item) => redactJson(item, redact));
+  if (isRecord(value))
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        redact(key),
+        redactJson(item, redact),
+      ]),
+    );
+  return value;
 }
 
 export async function runCli(
@@ -127,25 +137,53 @@ export async function runCli(
     ((text: string) => {
       process.stdout.write(text);
     });
-  const err =
+  const writeError =
     context.stderr ??
     ((text: string) => {
       process.stderr.write(text);
     });
-  const secrets: string[] = [
+  const secrets = new Set<string>();
+  const rememberSecret = (value: string | undefined | null): void => {
+    if (!value) return;
+    for (const secret of [
+      value,
+      value.trim(),
+      JSON.stringify(value.trim()).slice(1, -1),
+    ])
+      if (secret) secrets.add(secret);
+  };
+  for (const value of [
     env.NETCUP_ACCESS_TOKEN,
     env.NETCUP_REFRESH_TOKEN,
-  ].flatMap((value) =>
-    value
-      ? [value, value.trim(), JSON.stringify(value.trim()).slice(1, -1)]
-      : [],
-  );
-  const rememberSecrets = (tokens: NetcupTokens): void => {
-    secrets.push(tokens.access_token, tokens.refresh_token);
+    env.NETCUP_CCP_API_KEY,
+  ])
+    rememberSecret(value);
+  const redact = (text: string): string => {
+    for (const secret of [...secrets].sort((a, b) => b.length - a.length))
+      text = text.split(secret).join("[redacted]");
+    return text;
+  };
+  const err = (text: string): void => {
+    writeError(terminalSafe(redact(text)));
+  };
+  const rememberTokens = (tokens: NetcupTokens): void => {
+    rememberSecret(tokens.access_token);
+    rememberSecret(tokens.refresh_token);
   };
   const json = (value: unknown, compact?: boolean): void => {
-    out(`${JSON.stringify(value ?? null, null, compact ? undefined : 2)}\n`);
+    out(
+      terminalSafe(
+        `${JSON.stringify(redactJson(value ?? null, redact), null, compact ? undefined : 2)}\n`,
+      ),
+    );
   };
+  const confirm = (question: string): Promise<boolean> =>
+    context.confirm
+      ? context.confirm(question)
+      : confirmAction(question, context.signal);
+  let ccp = false;
+  let requestSent = false;
+  let changeRequestSent = false;
   try {
     context.signal?.throwIfAborted();
     const { values, positionals } = parseArgs({
@@ -169,6 +207,13 @@ export async function runCli(
         online: { type: "boolean" },
         offline: { type: "boolean" },
         hours: { type: "string" },
+        fqdn: { type: "string" },
+        "domain-id": { type: "string" },
+        page: { type: "string" },
+        "per-page": { type: "string" },
+        field: { type: "string" },
+        direction: { type: "string" },
+        file: { type: "string" },
       },
     });
     if (values.version) {
@@ -176,13 +221,26 @@ export async function runCli(
       return 0;
     }
     const group = positionals[0];
-    if (values.help || positionals.length === 0) {
+    ccp = group === "ccp";
+    const commandArgs = ccp ? positionals.slice(1) : positionals;
+    const authGroup = commandArgs[0];
+    if (
+      values.help ||
+      positionals.length === 0 ||
+      (ccp && commandArgs.length === 0)
+    ) {
       if (!group) {
         onlyOptions(values, []);
         out(help);
-      } else if (["login", "logout", "auth"].includes(group))
+      } else if (ccp) {
+        out(
+          ["login", "logout", "auth"].includes(authGroup)
+            ? authHelp(authGroup, true)
+            : ccpCommandHelp(),
+        );
+      } else if (["login", "logout", "auth"].includes(group)) {
         out(authHelp(group));
-      else {
+      } else {
         const text = commandHelp(group);
         if (!text)
           throw new CliUsageError(
@@ -193,184 +251,287 @@ export async function runCli(
       return 0;
     }
 
-    const login = group === "login";
-    const logout = group === "logout";
-    const status = group === "auth" && positionals[1] === "status";
-    if (group === "auth" && !status)
-      throw new CliUsageError(
-        "Use netcup auth status to read the signed-in account.",
-      );
+    const login = authGroup === "login";
+    const logout = authGroup === "logout";
+    const status = authGroup === "auth" && commandArgs[1] === "status";
+    if (authGroup === "auth" && !status)
+      throw new CliUsageError(authHelp("auth", ccp));
     if (login || logout || status) {
-      const expected = status ? 2 : 1;
-      if (positionals.length !== expected)
-        throw new CliUsageError(authHelp(group));
-      onlyOptions(values, logout ? ["local"] : []);
+      if (commandArgs.length !== (status ? 2 : 1))
+        throw new CliUsageError(authHelp(authGroup, ccp));
+      onlyOptions(values, logout && !ccp ? ["local"] : []);
     }
-    const command =
-      login || logout || status
-        ? undefined
-        : resolveCommand(positionals, values);
+    let command: CliCommand | undefined;
+    if (!login && !logout && !status) {
+      command = ccp
+        ? await resolveCcpCommand(commandArgs, values, err)
+        : resolveCommand(commandArgs, values);
+    }
     if (command?.confirmation && !values.yes) {
-      const accepted = await (context.confirm
-        ? context.confirm(command.confirmation)
-        : confirmAction(command.confirmation, context.signal));
-      if (!accepted) throw new CliUsageError("Canceled. No request was sent.");
-    }
-
-    const store = new CredentialStore(env);
-    const transport = context.fetch ?? globalThis.fetch;
-    const fetch: NetcupFetch = (request) =>
-      transport(
-        context.signal
-          ? new Request(request, { signal: context.signal })
-          : request,
-      );
-    const common = {
-      fetch,
-      authUrl: env.NETCUP_AUTH_URL,
-      baseUrl: env.NETCUP_BASE_URL,
-    };
-    if (login) {
-      let previous = (await store.read())?.refreshToken ?? null;
-      const auth = new NetcupAuth({
-        ...common,
-        onTokens: async (tokens) => {
-          rememberSecrets(tokens);
-          await store.save(tokens.refresh_token, previous);
-          previous = tokens.refresh_token;
-        },
-      });
-      err("Requesting a login code...\n");
-      const device = await auth.startDeviceAuthorization(context.signal);
-      err(
-        `Open ${device.verification_uri_complete ?? device.verification_uri}\nEnter code: ${device.user_code}\nWaiting for browser approval. Press Ctrl-C to cancel.\n`,
-      );
-      await auth.waitForDeviceAuthorization(device, context.signal);
-      err(
-        `Login saved in ${JSON.stringify(store.path)}. This file contains a plaintext refresh token.\n`,
-      );
-      if (env.NETCUP_ACCESS_TOKEN || env.NETCUP_REFRESH_TOKEN)
-        err(
-          "Environment credentials are still set and take precedence. Unset them to use the saved login.\n",
-        );
-      json({ authenticated: true }, values.compact);
-      return 0;
-    }
-
-    const accessToken = env.NETCUP_ACCESS_TOKEN?.trim();
-    const refreshToken = env.NETCUP_REFRESH_TOKEN?.trim();
-    for (const [name, token] of [
-      ["NETCUP_ACCESS_TOKEN", accessToken],
-      ["NETCUP_REFRESH_TOKEN", refreshToken],
-    ]) {
-      if (token && !/^[!-~]+$/.test(token)) {
-        throw new CliUsageError(
-          `${name} contains spaces, line breaks or unsupported characters. Copy it again, or unset it and run netcup login.`,
-        );
+      if (command.preview) {
+        if (!context.confirm && (!process.stdin.isTTY || !process.stderr.isTTY))
+          throw new CliUsageError(
+            `${command.confirmation}\nNo request was sent. Add --yes if you intend to run this action from a script.`,
+          );
+      } else if (!(await confirm(command.confirmation))) {
+        throw new CliUsageError("Canceled. No request was sent.");
       }
     }
-    if (accessToken && refreshToken)
-      throw new CliUsageError(
-        "Both NETCUP_ACCESS_TOKEN and NETCUP_REFRESH_TOKEN are set. Unset one before running this command.",
-      );
-    if (logout) {
-      if (accessToken || refreshToken)
-        throw new CliUsageError(
-          "Environment credentials are active. Unset NETCUP_ACCESS_TOKEN and NETCUP_REFRESH_TOKEN before logging out of the saved account.",
+
+    const transport = context.fetch ?? globalThis.fetch;
+    const fetch: NetcupFetch = (request) => {
+      context.signal?.throwIfAborted();
+      const outgoing = context.signal
+        ? new Request(request, { signal: context.signal })
+        : request;
+      requestSent = true;
+      if (!["GET", "HEAD", "OPTIONS"].includes(request.method))
+        changeRequestSent = true;
+      return transport(outgoing);
+    };
+    const store = new CredentialStore(env, ccp ? "ccp" : "scp");
+    let client: NetcupClient;
+    if (ccp) {
+      const createClient = (key?: string): NetcupClient =>
+        new NetcupClient({
+          ccp: { apiKey: key, baseUrl: env.NETCUP_CCP_BASE_URL, fetch },
+        });
+      if (login) {
+        const previous = (await store.read()) ?? null;
+        rememberSecret(previous);
+        err(
+          "Create or copy a key in CCP > Master Data > API. Input is hidden.\n",
         );
-      const saved = await store.read();
-      if (!saved) {
-        err("No saved login was found. Use netcup login to sign in.\n");
+        const entered = await (context.promptSecret
+          ? context.promptSecret("CCP API key: ")
+          : promptSecret("CCP API key: ", context.signal));
+        rememberSecret(entered);
+        const key = apiKey(entered);
+        err("Checking the CCP API key...\n");
+        await createClient(key).ccp.domains.list({ perPage: 1 });
+        context.signal?.throwIfAborted();
+        await store.save(key, previous);
+        err(
+          `CCP key saved in ${JSON.stringify(store.path)}. This file contains a plaintext API key.\n`,
+        );
+        if (env.NETCUP_CCP_API_KEY?.trim())
+          err(
+            "NETCUP_CCP_API_KEY still takes precedence. Unset it to use the saved key.\n",
+          );
+        json({ authenticated: true }, values.compact);
+        return 0;
+      }
+      const environmentKey = env.NETCUP_CCP_API_KEY?.trim();
+      if (logout) {
+        if (environmentKey)
+          throw new CliUsageError(
+            "NETCUP_CCP_API_KEY is active. Unset it before removing the saved CCP key.",
+          );
+        const saved = await store.read();
+        if (saved) {
+          rememberSecret(saved);
+          context.signal?.throwIfAborted();
+          await store.remove(saved);
+          err(
+            "Removed the local CCP key. It was not revoked. Delete it in CCP > Master Data > API to revoke access.\n",
+          );
+        } else {
+          err(
+            "No saved CCP key was found. Use netcup ccp login to save one.\n",
+          );
+        }
         json({ authenticated: false, revoked: false }, values.compact);
         return 0;
       }
-      secrets.push(saved.refreshToken);
-      if (!values.local) {
-        err("Revoking the saved login...\n");
-        try {
-          await new NetcupAuth({
-            ...common,
-            refreshToken: saved.refreshToken,
-          }).revoke(undefined, context.signal);
-        } catch {
+      const publicTypes =
+        commandArgs[0] === "dns" && commandArgs[1] === "types";
+      let key: string | undefined;
+      if (!publicTypes) {
+        key = environmentKey || (await store.read());
+        rememberSecret(key);
+        if (!key)
           throw new Error(
-            "Could not revoke the saved login. Its file was kept. Try again, or use netcup logout --local to remove only the local file without revoking access.",
+            "No CCP key was found. Run netcup ccp login, or set NETCUP_CCP_API_KEY for a script.",
           );
-        }
+        key = apiKey(key);
       }
-      await store.remove(saved.refreshToken);
-      err(
-        values.local
-          ? "Removed the local login file. Netcup access was not revoked.\n"
-          : "Revoked the saved login and removed its file.\n",
-      );
-      json({ authenticated: false, revoked: !values.local }, values.compact);
-      return 0;
+      client = createClient(key);
+      if (status) {
+        err("Checking the CCP API key...\n");
+        await client.ccp.domains.list({ perPage: 1 });
+        json(
+          {
+            authenticated: true,
+            source: environmentKey ? "environment" : "saved",
+          },
+          values.compact,
+        );
+        return 0;
+      }
+    } else {
+      const common = {
+        fetch,
+        authUrl: env.NETCUP_AUTH_URL,
+        baseUrl: env.NETCUP_BASE_URL,
+      };
+      if (login) {
+        let previous = (await store.read()) ?? null;
+        rememberSecret(previous);
+        const auth = new NetcupAuth({
+          ...common,
+          onTokens: async (tokens) => {
+            rememberTokens(tokens);
+            context.signal?.throwIfAborted();
+            await store.save(tokens.refresh_token, previous);
+            previous = tokens.refresh_token;
+          },
+        });
+        err("Requesting a login code...\n");
+        const device = await auth.startDeviceAuthorization(context.signal);
+        err(
+          `Open ${device.verification_uri_complete ?? device.verification_uri}\nEnter code: ${device.user_code}\nWaiting for browser approval. Press Ctrl-C to cancel.\n`,
+        );
+        await auth.waitForDeviceAuthorization(device, context.signal);
+        err(
+          `Login saved in ${JSON.stringify(store.path)}. This file contains a plaintext refresh token.\n`,
+        );
+        if (env.NETCUP_ACCESS_TOKEN || env.NETCUP_REFRESH_TOKEN)
+          err(
+            "Environment credentials are still set and take precedence. Unset them to use the saved login.\n",
+          );
+        json({ authenticated: true }, values.compact);
+        return 0;
+      }
+      const accessToken = env.NETCUP_ACCESS_TOKEN?.trim();
+      const refreshToken = env.NETCUP_REFRESH_TOKEN?.trim();
+      for (const [name, token] of [
+        ["NETCUP_ACCESS_TOKEN", accessToken],
+        ["NETCUP_REFRESH_TOKEN", refreshToken],
+      ]) {
+        if (token && !/^[!-~]+$/.test(token))
+          throw new CliUsageError(
+            `${name} contains spaces, line breaks or unsupported characters. Copy it again, or unset it and run netcup login.`,
+          );
+      }
+      if (accessToken && refreshToken)
+        throw new CliUsageError(
+          "Both NETCUP_ACCESS_TOKEN and NETCUP_REFRESH_TOKEN are set. Unset one before running this command.",
+        );
+      if (logout) {
+        if (accessToken || refreshToken)
+          throw new CliUsageError(
+            "Environment credentials are active. Unset NETCUP_ACCESS_TOKEN and NETCUP_REFRESH_TOKEN before logging out of the saved account.",
+          );
+        const saved = await store.read();
+        if (!saved) {
+          err("No saved login was found. Use netcup login to sign in.\n");
+          json({ authenticated: false, revoked: false }, values.compact);
+          return 0;
+        }
+        rememberSecret(saved);
+        if (!values.local) {
+          err("Revoking the saved login...\n");
+          try {
+            await new NetcupAuth({ ...common, refreshToken: saved }).revoke(
+              undefined,
+              context.signal,
+            );
+          } catch {
+            throw new Error(
+              "Could not revoke the saved login. Its file was kept. Try again, or use netcup logout --local to remove only the local file without revoking access.",
+            );
+          }
+        }
+        await store.remove(saved);
+        err(
+          values.local
+            ? "Removed the local login file. Netcup access was not revoked.\n"
+            : "Revoked the saved login and removed its file.\n",
+        );
+        json({ authenticated: false, revoked: !values.local }, values.compact);
+        return 0;
+      }
+      if (accessToken) client = new NetcupClient({ ...common, accessToken });
+      else if (refreshToken)
+        client = new NetcupClient({
+          ...common,
+          refreshToken,
+          onTokens: rememberTokens,
+        });
+      else {
+        const saved = await store.read();
+        if (!saved)
+          throw new Error(
+            "No login was found. Run netcup login, or set NETCUP_ACCESS_TOKEN or NETCUP_REFRESH_TOKEN for a script.",
+          );
+        rememberSecret(saved);
+        let previous = saved;
+        client = new NetcupClient({
+          ...common,
+          refreshToken: previous,
+          onTokens: async (tokens) => {
+            rememberTokens(tokens);
+            context.signal?.throwIfAborted();
+            await store.save(tokens.refresh_token, previous);
+            previous = tokens.refresh_token;
+          },
+        });
+      }
+      if (status) {
+        err("Checking the signed-in account...\n");
+        json(
+          {
+            authenticated: true,
+            user: await client.auth.userInfo(context.signal),
+          },
+          values.compact,
+        );
+        return 0;
+      }
     }
 
-    let client: NetcupClient;
-    if (accessToken) client = new NetcupClient({ ...common, accessToken });
-    else if (refreshToken)
-      client = new NetcupClient({
-        ...common,
-        refreshToken,
-        onTokens: rememberSecrets,
-      });
-    else {
-      const saved = await store.read();
-      if (!saved)
-        throw new Error(
-          "No login was found. Run netcup login, or set NETCUP_ACCESS_TOKEN or NETCUP_REFRESH_TOKEN for a script.",
-        );
-      secrets.push(saved.refreshToken);
-      let previous = saved.refreshToken;
-      client = new NetcupClient({
-        ...common,
-        refreshToken: previous,
-        onTokens: async (tokens) => {
-          rememberSecrets(tokens);
-          await store.save(tokens.refresh_token, previous);
-          previous = tokens.refresh_token;
-        },
-      });
-    }
-    if (status) {
-      err("Checking the signed-in account...\n");
-      json(
-        {
-          authenticated: true,
-          user: await client.auth.userInfo(context.signal),
-        },
-        values.compact,
-      );
-      return 0;
-    }
     if (!command)
       throw new CliUsageError("Choose a command. Run netcup --help for usage.");
     err(`${command.label}\n`);
+    if (command.preview) {
+      const preview = await command.preview(client);
+      err(`${JSON.stringify(redactJson(preview, redact), null, 2)}\n`);
+      if (
+        command.confirmation &&
+        !values.yes &&
+        !(await confirm(command.confirmation))
+      )
+        throw new CliUsageError("Canceled. No change request was sent.");
+    }
+    context.signal?.throwIfAborted();
     const result = await command.execute(client);
     json(result, values.compact);
-    if (Array.isArray(result) && result.length === 0 && command.emptyMessage)
+    const rows = ccp && isRecord(result) ? result.result : result;
+    if (Array.isArray(rows) && rows.length === 0 && command.emptyMessage)
       err(`${command.emptyMessage}\n`);
-    const task = taskId(result);
-    if (task && command.mutation)
-      err(
-        `Netcup accepted the request. Check its progress with netcup tasks get ${JSON.stringify(task)}.\n`,
-      );
-    else if (result === undefined)
-      err(
-        command.mutation
-          ? "Netcup accepted the request. An empty response does not confirm that server work has finished.\n"
-          : "Netcup returned no data. Check the ID and your account permissions, then try again.\n",
-      );
+    if (!ccp) {
+      const task = taskId(result);
+      if (task && command.mutation)
+        err(
+          `Netcup accepted the request. Check its progress with netcup tasks get ${JSON.stringify(task)}.\n`,
+        );
+      else if (result === undefined)
+        err(
+          command.mutation
+            ? "Netcup accepted the request. An empty response does not confirm that server work has finished.\n"
+            : "Netcup returned no data. Check the ID and your account permissions, then try again.\n",
+        );
+    }
     return 0;
   } catch (error) {
     if (context.signal?.aborted || error instanceof CliCanceledError) {
-      err(
-        error instanceof CliCanceledError
-          ? "Canceled. No request was sent.\n"
-          : "Canceled. A request already sent to Netcup may still run.\n",
-      );
+      if (changeRequestSent)
+        err("Canceled. A request already sent to Netcup may still run.\n");
+      else if (requestSent)
+        err(
+          "Canceled. Only read requests were sent. No change request was sent.\n",
+        );
+      else err("Canceled. No request was sent.\n");
       return 130;
     }
     let message =
@@ -378,20 +539,30 @@ export async function runCli(
         ? error.message
         : "The command failed. Try again or run netcup --help.";
     if (error instanceof NetcupAuthError) {
-      message =
-        error.code === "token_storage_failed"
-          ? "Could not save the refreshed login. Check the login folder's permissions, then run netcup login again."
-          : `${message} Use netcup login to approve access again if needed.`;
+      if (ccp)
+        message = `${message} Run netcup ccp login or check NETCUP_CCP_API_KEY.`;
+      else
+        message =
+          error.code === "token_storage_failed"
+            ? "Could not save the refreshed login. Check the login folder's permissions, then run netcup login again."
+            : `${message} Use netcup login to approve access again if needed.`;
     } else if (error instanceof NetcupError) {
-      if (error.status === 401)
+      if (ccp) {
+        if (error.status === 401 || ccpAuthenticationError(error))
+          message =
+            "Netcup rejected the CCP API key. Run netcup ccp login again, or replace NETCUP_CCP_API_KEY if it is set. SCP login tokens do not work with this API.";
+        else if (error.status === 403)
+          message =
+            "Netcup denied this CCP request. Check that the API key and domain belong to the intended account in the Customer Control Panel.";
+      } else if (error.status === 401)
         message =
           "Netcup rejected the access token. Run netcup login again, or replace the token provided by your environment.";
       else if (error.status === 403)
         message =
           "Netcup denied this request. Check the account permissions and the API IP allowlist in the Server Control Panel.";
+    } else if (error instanceof TypeError && requestSent) {
+      message = `Could not complete the Netcup request: ${message}. Check your connection and the API address.${changeRequestSent ? " Check the control panel before retrying a change; the request may have been accepted." : " Try the read again once the connection works."}`;
     }
-    for (const secret of secrets)
-      if (secret) message = message.split(secret).join("[redacted]");
     err(`${message}\n`);
     if (
       error instanceof CliUsageError ||

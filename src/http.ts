@@ -4,9 +4,11 @@ import { NetcupAuth } from "./auth";
 import type { AuthOptions } from "./auth";
 import { NetcupError } from "./errors";
 import type { paths } from "./schema";
+import type { NetcupCcpConfig } from "./ccp-http";
 
 export interface NetcupConfig extends AuthOptions {
   baseUrl?: string;
+  ccp?: NetcupCcpConfig;
 }
 
 export function createApi(

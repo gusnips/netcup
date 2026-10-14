@@ -6,7 +6,7 @@ Manage Netcup servers from JavaScript or TypeScript.
 const server = await netcup.servers.get(12345);
 ```
 
-Unofficial SDK for Netcup's Server Control Panel (SCP) REST API. It covers all 86 current operations in the supplied API release `2026.1012.092426`. It does not order servers or manage DNS zones through Netcup's separate customer API. Requires Node.js 18.3 or newer, or Bun.
+Unofficial SDK for Netcup's Server Control Panel (SCP) REST API and current Customer Control Panel (CCP) domain/DNS API. It covers 86 current SCP operations in API release `2026.1012.092426` and 17 current CCP operations in `2026.0921.153936`. It does not order servers, manage invoices or use the legacy CCP JSON API. Requires Node.js 18.3 or newer, or Bun.
 
 ## Install
 
@@ -68,6 +68,77 @@ const servers = await netcup.servers.list();
 Netcup says offline refresh tokens must be used at least once every 30 days to stay valid. The SDK does not run a background keepalive.
 
 If another service manages your tokens, pass `accessToken: async () => getCurrentToken()` instead. Do not pass both `accessToken` and `refreshToken`.
+
+## Domains and DNS
+
+CCP uses a separate API key, not an SCP login token:
+
+```ts
+import { NetcupCcpClient } from "netcup-sdk";
+
+const ccp = new NetcupCcpClient("your-ccp-api-key");
+const domains = await ccp.domains.list();
+console.log(domains.result);
+```
+
+Create the key in **CCP > Master Data > API**. The client sends it as `Authorization: Bearer <key>` to `https://api.netcup.com`. It does not use legacy customer-number/password sessions. A client without a key can call the public `ccp.dns.recordTypes()` method; protected calls fail before a request if the key is missing.
+
+All named CCP methods return the complete API envelope: `success`, `errors`, `messages`, `meta` and `result`. Keep `meta` for page information and `messages` for provider notices. Domain and revision lists use `page`/`perPage`; they do not use SCP's offset/limit. Component fields such as a revision's `identifier` are optional in the specification and remain optional in TypeScript.
+
+| Property      | Methods                                                                                                                                                                                                 |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ccp.domains` | `list`, `listAcmeChallenges`, `createAcmeChallenge`, `getAcmeChallenge`, `deleteAcmeChallenge`                                                                                                          |
+| `ccp.dns`     | `recordTypes`, `listRevisions`, `createRevision`, `getRevision`, `deleteRevision`, `applyChanges`, `applyRevisionChanges`, `commitRevision`, `listRecords`, `createRecord`, `getRecord`, `deleteRecord` |
+
+ACME challenges prove domain ownership for TLS certificates. Their deletion returns `undefined` for HTTP 204. DNS record/revision deletion instead returns an envelope with `result: null`. There is no record PATCH method; a change set can delete an old record and create its replacement.
+
+### Prepare and review a DNS change
+
+This sends a change request. Use the intended CCP domain ID, not an SCP server ID:
+
+```ts
+const prepared = await ccp.dns.applyChanges(42, {
+  autoCommit: false,
+  strict: true,
+  create: [{ name: "www", type: "A", rdata: "192.0.2.10", ttl: 300 }],
+});
+const revisionId = prepared.result.identifier;
+if (!revisionId) {
+  throw new Error(
+    "Netcup returned no revision ID. List revisions before trying again.",
+  );
+}
+const records = await ccp.dns.listRecords(42, revisionId);
+console.log(records);
+```
+
+`42` and `192.0.2.10` are example values. Use a real domain ID and the intended IP. The SDK does not prompt for approval. Only after reviewing the exact revision, request publication explicitly:
+
+```ts
+await ccp.dns.commitRevision(42, revisionId);
+```
+
+Change-set deletion requires the full input tuple `name/type/rdata/ttl`, not a record UUID. Individual `deleteRecord` calls use the record UUID. Output TTL can be `null`; do not turn it into an invented input TTL. The API exposes an `immutable` field but does not document client-side modification rules for it.
+
+Netcup does not document active/draft state enums, which records revision creation copies, atomic conflict preconditions or idempotency. Do not guess a current revision from list order, automatically retry a write or treat a commit response as proof of DNS propagation. Record listing has no documented paging controls; check its metadata before relying on a complete review. The CLI refuses review/commit when metadata explicitly reports missing records.
+
+### Use both API families
+
+You can also configure CCP under the existing client:
+
+```ts
+const netcup = new NetcupClient({
+  accessToken: "your-scp-access-token",
+  ccp: { apiKey: "your-ccp-api-key" },
+});
+const domains = await netcup.ccp.domains.list();
+```
+
+The `ccp` getter requires explicit `ccp` configuration. It never borrows the root SCP credentials, URLs or fetch function. Pass a CCP-specific `fetch` in that configuration if needed. A CCP-only client can use `new NetcupClient({ ccp: { apiKey: "your-key" } })` without an SCP token.
+
+`ccp.api` is the separate raw `openapi-fetch` client for CCP. Raw calls expose `{ data, error, response }`; unlike named methods, they do not reject an HTTP-200 envelope with `success: false` for you. Do not share SCP headers with it.
+
+Types include `CcpPaths`, `CcpComponents`, `CcpDomainListQuery`, `CcpDnsRecordInput` and `CcpDnsChangeSet`. The existing SCP `paths` and `components` exports have not changed.
 
 ## Server actions
 
@@ -136,7 +207,7 @@ type Server = components["schemas"]["Server"];
 
 ## Errors
 
-Named methods throw `NetcupError` for failed HTTP responses. It exposes `status` and the original `body`, which can be an object, an array, text or an empty value.
+Named methods throw `NetcupError` for failed HTTP responses. CCP methods also reject `success: false` inside a successful HTTP response and malformed required envelopes. The error exposes `status` and the original `body`, including the provider's structured error codes. CCP authentication failures can use HTTP 400, not only 401.
 
 ```ts
 import { NetcupError } from "netcup-sdk";
@@ -156,10 +227,11 @@ Login failures throw `NetcupAuthError` with `code` and optional HTTP `status`. O
 
 ## Options
 
-`NetcupClient` accepts an access-token string or an object with `accessToken`, `refreshToken`, `onTokens`, `baseUrl`, `authUrl` and `fetch`. `fetch` receives a `Request` and returns a `Response`; use it for tests or a custom transport.
+`NetcupClient` accepts an access-token string or an object with `accessToken`, `refreshToken`, `onTokens`, `baseUrl`, `authUrl`, `fetch` and optional `ccp`. `NetcupCcpClient` accepts an API-key string or its own `{ apiKey, baseUrl, fetch }` options. A `fetch` function receives a `Request` and returns a `Response`; use it for tests or a custom transport.
 
-Default API URL: `https://servercontrolpanel.de/scp-core`.
-Default authentication URL: `https://servercontrolpanel.de/realms/scp/protocol/openid-connect`.
+Default SCP API URL: `https://servercontrolpanel.de/scp-core`.
+Default SCP authentication URL: `https://servercontrolpanel.de/realms/scp/protocol/openid-connect`.
+Default CCP API URL: `https://api.netcup.com`.
 
 Only override those URLs with endpoints you trust: the SDK sends credentials to them.
 
@@ -174,7 +246,7 @@ bun run build
 bun test src/client.test.ts
 ```
 
-Types are generated from the checked-in `openapi.json`. Tests use mocked requests, not live servers. CI typechecks ready PRs; it does not run tests or publish.
+Types are generated from the separate checked-in `openapi.json` (SCP) and `openapi-ccp.json` (CCP). Tests use mocked requests, not live accounts. Run only the test file you change, such as `bun test src/ccp.test.ts`. CI typechecks ready PRs; it does not run tests or publish.
 
 [Netcup API docs](https://www.netcup.com/en/helpcenter/documentation/servercontrolpanel/api)
 
