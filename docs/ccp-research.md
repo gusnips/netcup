@@ -6,7 +6,7 @@ Checked on 2026-10-13. Authentication and implementation notes updated on 2026-1
 
 The separate `ccp` group uses the current domain and DNS API, not the older DNS API used by community clients. Server Control Panel (SCP) commands and credentials remain separate.
 
-MCP support stays in v2. The [MCP research](mcp-research.md) covers a proposed npx/bunx setup. The client would start a local process, without a separately managed server.
+`netcup-sdk@1.0.0` adds read-only MCP tools for selected server, task, domain and DNS data. The AI client starts and owns a local process; there is no separately managed server. See the [README setup](../README.md#use-with-an-ai-client) for the versioned npx/bunx commands and the [MCP research](mcp-research.md) for the design and sources.
 
 ## Current domain and DNS API
 
@@ -79,4 +79,6 @@ If legacy support is needed, expose it explicitly rather than silently switching
 
 ## Scope limits
 
-The current CCP client and CLI shipped in `netcup-sdk@0.3.0` and `@gusnips/netcup@1.2.0`. Legacy APIs and MCP remain out of scope for that release. No real account login, DNS change or server mutation was performed. The reference repositories were read, not installed or run.
+The current CCP client and CLI shipped in `netcup-sdk@0.3.0` and `@gusnips/netcup@1.2.0`. Legacy APIs and MCP were out of scope for that release. MCP is included in core `1.0.0` and alias `2.0.0`, with selected read-only domain and DNS tools. Legacy APIs remain excluded.
+
+No real account login, DNS change or server mutation was performed for this research. The reference repositories were read, not installed or run.

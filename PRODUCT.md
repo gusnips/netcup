@@ -10,7 +10,9 @@ Server commands use SCP device approval to inspect existing servers and request 
 
 The separate `ccp` group uses an API key for the current domain/DNS API. List domains, inspect exact DNS revisions, prepare changes with automatic commit off, then review and publish explicitly. The CLI does not guess which revision is active.
 
-The SDK covers more operations than the CLI, including ACME DNS challenges for certificate issuance. Neither surface orders servers, manages invoices or uses the legacy CCP JSON API. MCP is a later release.
+The SDK covers more operations than the CLI, including ACME DNS challenges for certificate issuance. Neither surface orders servers, manages invoices or uses the legacy CCP JSON API.
+
+`netcup mcp` lets an AI client read selected server, task, domain and DNS data. The client starts and owns a local stdio process, not a hosted service. It reuses a prior SCP login or CCP API key, with environment credentials taking precedence. It has nine fixed read-only tools, no login prompts and no write tools. Node.js 22.0.0 or newer is required.
 
 ## Rules
 
@@ -22,3 +24,7 @@ The SDK covers more operations than the CLI, including ACME DNS challenges for c
 - Confirm changes that can interrupt service or replace data. Scripts opt in with `--yes`.
 - DNS commit must show the exact revision's records before approval. Stop if metadata reports missing records.
 - Accepted work is not proof of completion or DNS propagation. Never retry changes automatically.
+- MCP uses fixed read tools and selected output fields, not a generic CLI, HTTP or file interface. Keep passwords and signed capabilities out of results.
+- MCP reserves stdout for protocol messages. Missing auth points to the matching CLI login and reconnection, never an interactive prompt.
+- Keep MCP page metadata and provider warnings. Without DNS record metadata, completeness is unknown.
+- A canceled tool must not cancel shared refresh work or discard a received rotated token. Do not claim refresh coordination across processes.

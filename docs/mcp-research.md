@@ -1,100 +1,116 @@
 # MCP launch research
 
-Checked on 2026-10-14. `netcup-sdk@0.3.0` and `@gusnips/netcup@1.2.0` are published. Neither includes MCP. This document proposes a later MCP release, not commands you can use today.
+Research checked on 2026-10-14, when `netcup-sdk@0.3.0` and `@gusnips/netcup@1.2.0` were published without MCP. The same-binary design below is implemented in core `1.0.0` and alias `2.0.0`. See the [README](../README.md#use-with-an-ai-client) for setup and the current tool catalog. The sources and research limits below describe the original investigation, not completed release verification.
 
-## Recommendation
+## One executable, local stdio
 
-Add `netcup mcp` to the existing binary. Use stdio: the AI app starts a local process and exchanges protocol messages through its input and output streams. The app manages that process. There is no web server to deploy or port to open.
+`netcup mcp` uses stdio: the AI app starts a local process and exchanges protocol messages through its input and output streams. The app owns that process. There is no web server to deploy or port to open.
 
-Use the existing package over a separate MCP package because the executable, typed API clients and private credential files already exist. The scoped alias can forward the same command. Keep one executable so `npx netcup-sdk` can still choose it.
+Use the existing package over a separate MCP package because the executable, typed API clients and private credential files already exist. The scoped alias forwards the same command. One executable keeps the normal CLI as the main product and lets `npx netcup-sdk` choose it without a second binary name.
 
-After MCP is published, the proposed launch is:
+The versioned launch is:
 
 ```sh
-npx --yes netcup-sdk@latest mcp
+npx --yes netcup-sdk@1.0.0 mcp
 ```
 
-The Bun equivalent is `bunx netcup-sdk@latest mcp`. Both download published JavaScript; users would not clone the repository or compile it. The first launch needs registry access. Later launches may use the package manager's cache.
+The Bun equivalent is `bunx netcup-sdk@1.0.0 mcp`. Both download published JavaScript; users do not clone the repository or compile it. The first launch needs registry access. Later launches may use the package manager's cache.
 
-For a reviewed setup, replace `latest` with the exact core version that includes MCP. Pin the core package, not only the alias: the alias's current dependency range allows newer core versions. A core version pin does not freeze every dependency.
+Pin the core package for a reviewed setup, not only the alias: the alias's dependency range allows newer core versions. A core version pin does not freeze every dependency.
 
-A hosted HTTP MCP service is a different product. It would need hosting, user authentication and a policy for storing or forwarding Netcup credentials. Do not add it just to avoid saying "local process".
+A hosted HTTP MCP service is a different product. It would need hosting, user authentication and a policy for storing or forwarding Netcup credentials. It is not part of this release.
 
-## Runtime
+## Runtime and version boundary
 
-Use the stable v2 TypeScript SDK, not the legacy v1 package. On the check date, `@modelcontextprotocol/server` and `@modelcontextprotocol/core` are `2.3.1` and require Node 20 or newer. Stdio uses `McpServer` and `serveStdio`; it does not need an HTTP framework. Keep the SDK's built-in support for older clients rather than writing a compatibility layer.
+The implementation uses the stable v2 TypeScript SDK, not the legacy v1 package. On the research date, `@modelcontextprotocol/server` and `@modelcontextprotocol/core` were `2.3.1` and required Node 20 or newer. Stdio uses `McpServer` and `serveStdio`, with built-in support for older clients. No HTTP framework or custom protocol compatibility layer is needed.
 
-Target Node 22 or newer for the MCP release. This needs an explicit change from Netcup's current Node 18.3 minimum. Today's releases and this documentation change keep that minimum unchanged. Standard `bunx` respects the executable's Node shebang; do not promise a Bun-only MCP setup without testing it.
+The Netcup release requires Node.js 22.0.0 or newer. This is a breaking change from the previous Node 18.3 minimum. Standard `bunx` respects the executable's Node shebang; it is not a Bun-only runtime setup.
+
+Core `1.0.0` and alias `2.0.0` make that runtime change explicit. Publishing it as core `0.4.0` would put the higher Node minimum inside the old alias `1.2.0` range of `>=0.3.0 <1.0.0`. The new alias uses `>=1.0.0 <2.0.0` and declares Node `>=22.0.0`. Older aliases keep their prior range.
 
 ## Client setup
 
-These examples are proposed only. They will not work until an MCP release is published. Use an exact core version instead of `latest` when reviewing a deployment.
+First run the login for the API family you need, outside the MCP process. For servers:
+
+```sh
+npx --yes netcup-sdk@1.0.0 login
+```
+
+For domains and DNS, use `npx --yes netcup-sdk@1.0.0 ccp login`. The public DNS record-type tool needs neither login.
 
 For Claude Code:
 
 ```sh
-claude mcp add --scope user --transport stdio netcup -- npx --yes netcup-sdk@latest mcp
+claude mcp add --scope user --transport stdio netcup -- npx --yes netcup-sdk@1.0.0 mcp
 ```
 
-User scope keeps the setup private and makes it available across projects. The command saves the setup; it does not prove the process can start or authenticate. Check the connection and discovered tools afterward. Claude Code does not automatically reconnect a stopped stdio server.
+User scope keeps the setup private and makes it available across projects. The command saves the setup; it does not prove the process can start or authenticate. Reconnect and check the connection and discovered tools afterward. Claude Code does not automatically reconnect a stopped stdio server.
 
-The equivalent command/arguments shape is:
+Clients that accept `mcpServers` can use this command/arguments shape:
 
 ```json
 {
   "mcpServers": {
     "netcup": {
       "command": "npx",
-      "args": ["--yes", "netcup-sdk@latest", "mcp"]
+      "args": ["--yes", "netcup-sdk@1.0.0", "mcp"]
     }
   }
 }
 ```
 
-For Bun, use `"command": "bunx"` and `"args": ["netcup-sdk@latest", "mcp"]`. Client configuration formats differ; do not assume every app accepts this top-level object or expands shell variables.
+For Bun, use `"command": "bunx"` and `"args": ["netcup-sdk@1.0.0", "mcp"]`. Client configuration formats differ; not every app accepts this top-level object or expands shell variables. No credentials belong in this example.
 
-Claude Desktop's [current setup guide](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop) favors desktop extensions (`.mcpb` files) and says the app bundles Node. That is a later packaging option for installing this same local integration through the app, not a reason to add a hosted service. Do not present the JSON above as a desktop-extension manifest.
+Claude Desktop's [setup guide inspected during research](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop) favors desktop extensions (`.mcpb` files) and says the app bundles Node. A desktop extension is a later packaging option for this same local integration. This release does not include one, and the JSON above is not an extension manifest or a claim about Desktop's manual configuration.
 
-## Credentials
+## Credentials and privacy
 
-Keep interactive login outside the MCP process. Users would first run the existing login for the API they need:
+The MCP process reuses the matching saved credentials when it runs as the same OS user with the same config folder. These are the existing plaintext `credentials.json` and `ccp-credentials.json` files, not a new credential store. See [saved credentials](../README.md#saved-credentials) for paths and permissions.
 
-```sh
-npx --yes netcup-sdk@latest login
-```
+`NETCUP_ACCESS_TOKEN` or `NETCUP_REFRESH_TOKEN` takes precedence over the saved SCP login. `NETCUP_CCP_API_KEY` takes precedence over the saved CCP key. SCP and CCP credentials, endpoints and recovery instructions remain separate. Public DNS record types use a keyless client without reading saved credentials.
 
-For domains and DNS, use `npx --yes netcup-sdk@latest ccp login` instead. The future MCP process should reuse the matching saved credentials when it runs as the same OS user with the same config folder.
+Missing or unusable credentials return the matching versioned login instruction and a reminder to reconnect. MCP has no auth tools, hidden terminal prompts or browser approval flow. GUI apps may not inherit a shell's environment or `PATH`; check the executable path and matching config-folder environment if setup fails. Claude Code supports `${VAR}` references in its configuration; that is not a portable promise for other clients.
 
-Scripts can already use `NETCUP_ACCESS_TOKEN` or `NETCUP_REFRESH_TOKEN` for SCP, and `NETCUP_CCP_API_KEY` for CCP. A future MCP adapter should preserve those separate credentials and environment precedence. Do not put keys in command arguments, prompts sent to the model or committed client settings.
+Do not put keys in command arguments, messages sent to the model or committed client settings. Selected server addresses, hostnames, domain names and DNS records can also be private. The AI client receives them, so its data policy still matters after credential fields have been excluded.
 
-Missing or unusable credentials must return a clear login instruction, not open a hidden terminal prompt or browser approval flow. GUI apps may not inherit a shell's environment or PATH. A setup error should tell the user to configure the executable path or matching config-folder environment. Claude Code supports `${VAR}` references in its configuration; that is not a portable promise for other clients.
+## Read-only scope
 
-## First scope
+The first release has nine fixed tools for selected server details, task status, domains, DNS record types, exact DNS revisions and records. The [README catalog](../README.md#available-tools) names each tool. There are no writes, auth, shell, local file-read or arbitrary HTTP tools.
 
-Start with explicit read-only tools for server details, task status, domains, DNS revisions and records. Do not turn every SDK method into a tool. Use approved operations and output fields, not an HTTP-method filter: rescue status can return a password, and snapshot/image/ISO reads can return signed download or upload access. Known-token redaction will not hide these other secrets.
+Approved operations and output fields define the boundary, not an HTTP-method filter. Rescue status can return a password, and snapshot/image/ISO reads can return signed download or upload access. Known-token redaction would not hide these other secrets. Those capabilities are excluded. Task output also excludes executing-user details, messages, results and error text.
 
-Keep writes out of the first MCP release. Later write tools need a person to enable them at setup and the client's approval flow. Tool annotations describe risk; they do not enforce permission or prove that a person approved a call. A model-supplied `confirm:true` is not human approval.
+SCP lists preserve `X-Total-Count` when present. CCP results keep selected envelope fields, pagination and provider notices. DNS record listing has no documented paging arguments. Explicitly incomplete metadata stays visible with a warning; absent metadata means completeness is unknown. The adapter does not invent paging controls or silently fetch every page.
 
-DNS writes must retain exact revision IDs, a complete review before commit, `autoCommit:false`, `strict:true` and no automatic retries. Review does not lock a revision, and a successful commit does not prove DNS propagation. Cancellation after a request is sent does not undo it.
+Later write tools would need a person to enable them at setup and the client's approval flow. Tool annotations describe risk; they do not enforce permission or prove that a person approved a call. A model-supplied `confirm:true` is not human approval.
+
+DNS writes in the CLI retain exact revision IDs, a complete review before commit when metadata permits that check, `autoCommit:false`, `strict:true` and no automatic retries. Review does not lock a revision, and a successful commit does not prove DNS propagation. MCP does not expose these writes.
 
 ## Adapter boundary
 
-Call `NetcupClient` and `NetcupCcpClient` directly. Do not shell out to the CLI and parse its output. Reuse `CredentialStore` and extract only the noninteractive credential selection both entrypoints need. Keep one shared SCP auth/client per process so its existing refresh coordination and awaited token persistence still apply. File locks do not serialize token refreshes across processes.
+The adapter uses `NetcupClient` and `NetcupCcpClient`, not shell commands or parsed CLI output. Fixed typed `.api.GET` calls retain access to response headers and per-call cancellation signals. It reuses `CredentialStore` and the shared noninteractive credential selection and known-secret redaction helpers.
 
-The SDK's named methods generally lack per-call cancellation signals. Settle that boundary before implementation: canceling one tool must not abort another tool or lose a rotated refresh token. Reuse pure DNS input checks and the revision review helper, not arbitrary file reads or CLI prompts.
+One lazily loaded SCP auth/client and one protected CCP client are shared per process. A failed initial credential load can be retried after the person fixes it. Public record types use a separate keyless client. Existing file locks protect credential updates; they do not serialize token refreshes across processes.
+
+Canceling a tool stops its data read and its wait for authentication, not another tool's work or the underlying shared refresh. A received rotated refresh token is still saved. Cached access is published only after the save succeeds, so a failed save cannot be bypassed by a later cached read. This does not guarantee persistence if the operating system kills the process during a save.
+
+Strict input objects reject unlisted arguments before I/O. Nested output schemas validate and select allowed fields, then known-secret values are redacted. Structured results have an object root and matching JSON text for older clients. Protocol keys and request IDs stay intact. Tool errors give a next step without forwarding raw response bodies, headers or unselected fields.
 
 Netcup's existing `misc.openapiMcp()` endpoint only explores SCP documentation. The [provider specification](../openapi.json) says it does not execute API calls, so it does not replace this account integration.
 
-The MCP process must reserve stdout for protocol messages. Diagnostics belong on stderr. CLI JSON printing and terminal confirmations are not an MCP transport. Preserve pagination and provider warnings. Return useful tool errors without exposing credentials, and treat API text as data, not instructions.
+MCP reserves stdout for protocol messages. Diagnostics belong on stderr. Normal CLI JSON printing stays separate and unchanged. API text is data, not instructions.
 
-Shut down cleanly when the client closes the connection. Before release, test a real subprocess for startup, tool discovery, one mocked read, safe authentication failure, cancellation and shutdown. Then check each supported client's setup. No MCP server or client registration was run for this research, and no real DNS or server mutation belongs in its smoke tests.
+The official SDK's stdio runner handles protocol discovery and older clients. Its factory is synchronous and side-effect-free; session state lives outside it. Stdin EOF and process signals own shutdown. A discarded discovery candidate must not stop the process, and shutdown must observe outstanding refresh persistence rather than silently discard it.
+
+## Research limits
+
+The original research inspected documentation and package metadata. It did not install or run the reference MCP servers, register a client, log in to a real account or change DNS or servers. Release testing and registry verification are separate from this research note.
 
 ## Evidence
 
 Microsoft's [Playwright MCP](https://github.com/microsoft/playwright-mcp#readme) uses `npx @playwright/mcp@latest`. Google's [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp#readme) uses `npx -y chrome-devtools-mcp@latest`. Both distribute a ready-to-run stdio process through npm. Their documentation and package metadata were inspected; neither server was installed or run.
 
 - [Official stdio guide](https://ts.sdk.modelcontextprotocol.io/v2/serving/stdio.html): process transport, output rules, lifecycle and older clients.
-- [Current server SDK metadata](https://registry.npmjs.org/@modelcontextprotocol/server/latest) and [core metadata](https://registry.npmjs.org/@modelcontextprotocol/core/latest): versions, dependencies and Node minimum. These links move as new versions ship.
+- [Server SDK metadata](https://registry.npmjs.org/@modelcontextprotocol/server/latest) and [core metadata](https://registry.npmjs.org/@modelcontextprotocol/core/latest): versions, dependencies and Node minimum. These links move as new versions ship; the versions above are the 2026-10-14 snapshot.
 - [Claude Code MCP guide](https://code.claude.com/docs/en/mcp): command syntax, user scope, environment references and reconnection limits.
 - [Tool specification](https://modelcontextprotocol.io/specification/2026-07-28/server/tools): annotations are hints, not permission checks.
-- [Existing credential store](../src/credentials.ts), [SCP auth](../src/auth.ts) and [CCP review/validation](../src/cli-ccp-commands.ts): code to reuse, not duplicate.
+- [Credential store](../src/credentials.ts), [SCP auth](../src/auth.ts) and [CCP review/validation](../src/cli-ccp-commands.ts): existing code reused rather than replaced.
