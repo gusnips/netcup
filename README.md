@@ -6,7 +6,9 @@ Manage Netcup servers and DNS from your terminal.
 npx netcup-sdk --help
 ```
 
-Unofficial CLI and JavaScript client. Requires Node.js 18.3 or newer, or Bun. Server commands use the Server Control Panel (SCP). Domain and DNS commands use the current Customer Control Panel (CCP) API for CloudDNS. They do not use Netcup's legacy DNS API.
+Unofficial CLI and JavaScript client. Requires Node.js 22.0.0 or newer. Server commands use the Server Control Panel (SCP). Domain and DNS commands use the current Customer Control Panel (CCP) API for CloudDNS. They do not use Netcup's legacy DNS API.
+
+Version `1.0.0` raises the Node minimum from 18.3 to 22.0.0 and adds read-only access for AI clients through MCP. The scoped alias `@gusnips/netcup@2.0.0` uses the same core release line. Alias `1.2.0` keeps its `<1.0.0` core range, so it does not pick up this runtime change.
 
 ## Start
 
@@ -165,6 +167,77 @@ Netcup says offline SCP refresh tokens must be used at least once every 30 days 
 
 Only override endpoints you trust: `NETCUP_BASE_URL` and `NETCUP_AUTH_URL` control SCP endpoints; `NETCUP_CCP_BASE_URL` controls the current CCP API. Your credentials are sent to those endpoints.
 
+## Use with an AI client
+
+MCP (Model Context Protocol) lets an AI client read selected Netcup data. It cannot change servers or DNS.
+
+First, run the matching login outside the AI client. For servers:
+
+```sh
+npx --yes netcup-sdk@1.0.0 login
+```
+
+For domains and DNS, run `npx --yes netcup-sdk@1.0.0 ccp login`. You need only the login for the tools you use. Skip login if you already supply matching environment credentials. Reading supported DNS record types needs no key.
+
+Use a local stdio connection, which sends messages through the process's input and output streams. Set your client's launch command to:
+
+```sh
+npx --yes netcup-sdk@1.0.0 mcp
+```
+
+Or use `bunx netcup-sdk@1.0.0 mcp`. Standard `bunx` uses Node for this executable, so Node.js 22.0.0 or newer is still required. There is no repository to clone, build step or server port. The client starts and owns a local process. If you run the command in a terminal by itself, it waits for MCP messages, not typed commands.
+
+For Claude Code:
+
+```sh
+claude mcp add --scope user --transport stdio netcup -- npx --yes netcup-sdk@1.0.0 mcp
+```
+
+Clients that accept a `mcpServers` configuration can use this command and arguments:
+
+```json
+{
+  "mcpServers": {
+    "netcup": {
+      "command": "npx",
+      "args": ["--yes", "netcup-sdk@1.0.0", "mcp"]
+    }
+  }
+}
+```
+
+For Bun, use `"command": "bunx"` and `"args": ["netcup-sdk@1.0.0", "mcp"]`. Client formats differ; use your client's local stdio instructions. This release does not include a Claude Desktop extension (`.mcpb`) or a hosted MCP service.
+
+Reconnect the client after saving its setup, then ask it to list your Netcup servers or domains. Check that it finds the tools below. Saving a setup does not prove the process can start or log in.
+
+### Login and privacy
+
+MCP uses the same plaintext files and environment precedence described above. Run it as the same OS user with the same config folder as your prior CLI login. `NETCUP_ACCESS_TOKEN` or `NETCUP_REFRESH_TOKEN` overrides the saved SCP login; `NETCUP_CCP_API_KEY` overrides the saved CCP key. The two API families stay separate.
+
+MCP never opens a login prompt or browser flow and has no auth tools. If credentials are missing or unusable, run the matching versioned login command above, then reconnect your AI client. If a desktop app cannot find `npx` or the saved login, check its executable path, `PATH` and config-folder environment. Apps may not inherit your terminal's environment.
+
+Do not put credentials in command arguments, messages to the model or committed client settings. Server IPs, hostnames, domain names and DNS values can also be private. Your AI client receives the selected results; check its data policy before connecting.
+
+### Available tools
+
+| Tool                        | What it reads                             |
+| --------------------------- | ----------------------------------------- |
+| `scp_servers_list`          | One page of servers                       |
+| `scp_servers_get`           | Selected details for one server           |
+| `scp_tasks_list`            | One page of server tasks                  |
+| `scp_tasks_get`             | Status of one task                        |
+| `ccp_domains_list`          | One page of domains                       |
+| `ccp_dns_record_types_list` | Supported DNS record types, without a key |
+| `ccp_dns_revisions_list`    | One page of a domain's DNS revisions      |
+| `ccp_dns_revisions_get`     | One exact DNS revision                    |
+| `ccp_dns_records_list`      | Records in one exact DNS revision         |
+
+The tools return only selected fields, not raw API responses. There are no write, shell, file-read or arbitrary HTTP tools. Passwords and signed download/upload access are excluded. Use exact DNS revision UUIDs; there is no `latest` or `current` shortcut.
+
+SCP lists keep the total from `X-Total-Count` when Netcup returns it. CCP results keep selected response fields, page metadata and provider notices. Lists do not fetch every page for you. DNS record listing has no documented paging arguments. Metadata can report missing records; without metadata, completeness is unknown. Do not treat such a result as a full DNS backup.
+
+Canceling a tool stops its read, not another tool or a shared SCP token refresh. A refresh already in progress can still finish and save a rotated token. Separate Netcup processes do not share refresh requests. MCP keeps stdout for protocol messages; normal CLI commands still print JSON.
+
 ## JavaScript and TypeScript
 
 The package also exports typed clients. CommonJS and ESM imports work under either package name.
@@ -179,7 +252,7 @@ The SDK covers 86 current SCP operations and all 17 operations in the checked-in
 
 [Read the SDK guide](https://github.com/gusnips/netcup/blob/main/docs/sdk.md).
 
-Server ordering, invoices, the legacy CCP JSON API and MCP are not included. See the [MCP research](https://github.com/gusnips/netcup/blob/main/docs/mcp-research.md) for the proposed setup.
+Server ordering, invoices and the legacy CCP JSON API are not included. MCP is limited to the selected read tools above; the SDK and normal CLI support more operations.
 
 ## Development
 
@@ -188,11 +261,10 @@ bun install
 bun run lint
 bun run typecheck
 bun run build
-bun test src/ccp.test.ts
-bun test src/cli.test.ts
+bun test src/mcp.test.ts
 ```
 
-Tests use mocked requests and temporary config folders, not live accounts. CI only typechecks ready PRs; it does not run tests or publish. `bun run generate` reads `openapi.json` for SCP and `openapi-ccp.json` for CCP.
+Run only the test file you change. Tests use mocked requests and temporary config folders, not live accounts. CI only typechecks ready PRs; it does not run tests or publish. `bun run generate` reads `openapi.json` for SCP and `openapi-ccp.json` for CCP.
 
 [Server API docs](https://www.netcup.com/en/helpcenter/documentation/server/rest-api) · [Current CCP API docs](https://www.netcup.com/en/helpcenter/documentation/netcup-api)
 

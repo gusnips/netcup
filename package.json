@@ -1,6 +1,6 @@
 {
   "name": "netcup-sdk",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "packageManager": "bun@1.4.2",
   "description": "Netcup CLI and typed JavaScript client for server and DNS management",
   "main": "dist/index.js",
@@ -51,6 +51,7 @@
     "scp",
     "ccp",
     "dns",
+    "mcp",
     "server",
     "vps",
     "api-client",
@@ -67,16 +68,19 @@
   },
   "homepage": "https://github.com/gusnips/netcup#readme",
   "engines": {
-    "node": ">=18.3.0"
+    "node": ">=22.0.0"
   },
   "publishConfig": {
     "access": "public"
   },
   "dependencies": {
-    "openapi-fetch": "^0.17.0"
+    "@modelcontextprotocol/server": "2.3.1",
+    "openapi-fetch": "^0.17.0",
+    "zod": "4.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@modelcontextprotocol/client": "2.3.1",
     "@types/bun": "^1.4.2",
     "@types/node": "^26.6.5",
     "eslint": "^10.12.0",

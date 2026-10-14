@@ -187,6 +187,46 @@ describe("CLI commands", () => {
     expect(await readdir(cli.root)).toEqual([]);
   });
 
+  test("MCP help and version bypass credentials and protocol startup", async () => {
+    const cli = await setup();
+    cli.context.env = {
+      ...cli.env,
+      NETCUP_ACCESS_TOKEN: "bad\naccess",
+      NETCUP_REFRESH_TOKEN: "also-set",
+      NETCUP_CCP_API_KEY: "bad\nkey",
+    };
+    for (const args of [
+      ["mcp", "--help"],
+      ["--help", "mcp"],
+      ["mcp", "--version"],
+    ])
+      expect(await cli.run(args)).toBe(0);
+    expect(cli.output.join("")).toContain("MCP over stdio");
+    expect(cli.output.join("")).toContain(`netcup-sdk@${version} mcp`);
+    expect(cli.output.join("")).toContain("--scope user --transport stdio");
+    expect(cli.requests).toHaveLength(0);
+    expect(cli.errors).toEqual([]);
+    expect(await readdir(cli.root)).toEqual([]);
+  });
+
+  test("MCP rejects normal CLI flags and subcommands before I/O", async () => {
+    const cli = await setup();
+    for (const args of [
+      ["mcp", "start"],
+      ["mcp", "--compact"],
+      ["mcp", "--yes"],
+      ["mcp", "--limit", "1"],
+      ["mcp", "--file", "/does-not-exist"],
+      ["mcp", "--help", "--compact"],
+      ["mcp", "--version", "extra"],
+    ])
+      expect(await cli.run(args)).toBe(2);
+    expect(cli.requests).toHaveLength(0);
+    expect(cli.output).toEqual([]);
+    expect(cli.errors.join("")).toContain("Usage: netcup mcp");
+    expect(await readdir(cli.root)).toEqual([]);
+  });
+
   test("invalid flags, arguments and updates fail before authentication", async () => {
     const cli = await setup();
     const cases = [
@@ -474,6 +514,30 @@ describe("CLI login and credentials", () => {
       `Bearer ${tokens.access_token}`,
     );
     expect(await cli.store.read()).toBe(tokens.refresh_token);
+  });
+
+  test("canceling after a refresh response saves rotation without a resource request", async () => {
+    const controller = new AbortController();
+    const cli = await setup((request) => {
+      if (!request.url.endsWith("/token"))
+        throw new Error("A canceled read must not reach the resource API");
+      const response = json(tokens);
+      const readText = response.text.bind(response);
+      response.text = async () => {
+        const body = await readText();
+        controller.abort();
+        return body;
+      };
+      return response;
+    });
+    await cli.store.save("previous-refresh", null);
+    cli.context.signal = controller.signal;
+    expect(await cli.run(["servers", "list"])).toBe(130);
+    expect(await cli.store.read()).toBe(tokens.refresh_token);
+    expect(cli.requests).toHaveLength(1);
+    expect(cli.requests[0].url.endsWith("/token")).toBe(true);
+    expect(cli.output).toEqual([]);
+    expect(cli.errors.join("")).not.toContain(tokens.refresh_token);
   });
 
   test("environment refresh tokens are not written to disk", async () => {

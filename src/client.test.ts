@@ -303,12 +303,16 @@ describe("authentication", () => {
     expect(auth.refreshToken).toBe("offline");
   });
 
-  test("keeps rotated tokens when storage fails without exposing secrets", async () => {
+  test("retries unsaved tokens and recovers when storage succeeds", async () => {
+    let storageFails = true;
+    let saved: string | undefined;
+    const mock = mockFetch(() => json(tokenResponse));
     const auth = new NetcupAuth({
       refreshToken: "offline",
-      fetch: async () => json(tokenResponse),
-      onTokens: () => {
-        throw new Error("secret access rotated");
+      fetch: mock.fetch,
+      onTokens: (tokens) => {
+        if (storageFails) throw new Error("secret access rotated");
+        saved = tokens.refresh_token;
       },
     });
     try {
@@ -322,6 +326,20 @@ describe("authentication", () => {
       expect(error.message).not.toContain("secret");
     }
     expect(auth.refreshToken).toBe("rotated");
+    await expect(auth.getAccessToken()).rejects.toThrow(
+      "Could not save the new tokens",
+    );
+    expect(saved).toBeUndefined();
+    expect(mock.requests).toHaveLength(2);
+    expect(
+      new URLSearchParams(await mock.requests[1].text()).get("refresh_token"),
+    ).toBe("rotated");
+    storageFails = false;
+    expect(await auth.getAccessToken()).toBe("access");
+    expect(saved).toBe("rotated");
+    expect(mock.requests).toHaveLength(3);
+    expect(await auth.getAccessToken()).toBe("access");
+    expect(mock.requests).toHaveLength(3);
   });
 
   test("validates token types and never includes raw OAuth errors", async () => {

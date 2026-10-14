@@ -6,7 +6,9 @@ Manage Netcup servers from JavaScript or TypeScript.
 const server = await netcup.servers.get(12345);
 ```
 
-Unofficial SDK for Netcup's Server Control Panel (SCP) REST API and current Customer Control Panel (CCP) domain/DNS API. It covers 86 current SCP operations in API release `2026.1012.092426` and 17 current CCP operations in `2026.0921.153936`. It does not order servers, manage invoices or use the legacy CCP JSON API. Requires Node.js 18.3 or newer, or Bun.
+Unofficial SDK for Netcup's Server Control Panel (SCP) REST API and current Customer Control Panel (CCP) domain/DNS API. It covers 86 current SCP operations in API release `2026.1012.092426` and 17 current CCP operations in `2026.0921.153936`. It does not order servers, manage invoices or use the legacy CCP JSON API. Requires Node.js 22.0.0 or newer.
+
+Version `1.0.0` raises the Node minimum from 18.3 to 22.0.0. The matching scoped alias is `@gusnips/netcup@2.0.0`; alias `1.2.0` keeps its core dependency below `1.0.0`.
 
 ## Install
 
@@ -63,7 +65,7 @@ const netcup = new NetcupClient({
 const servers = await netcup.servers.list();
 ```
 
-`saveRefreshToken` is your secret-store function. The SDK awaits `onTokens` before the request continues. It caches access tokens and shares concurrent refresh requests. The latest token is also available at `netcup.auth.refreshToken`. If saving fails, the SDK keeps that token in memory and throws `NetcupAuthError` with code `token_storage_failed`. Save it before restarting.
+`saveRefreshToken` is your secret-store function. The SDK awaits `onTokens` before the request continues and does not publish cached access until saving succeeds. It shares concurrent refresh requests on that auth instance, not across separate processes. The latest token is also available at `netcup.auth.refreshToken`. If saving fails, the SDK keeps that refresh token in memory, clears cached access and throws `NetcupAuthError` with code `token_storage_failed`. A later call cannot bypass the failed save with a cached access token. Save the latest refresh token before restarting.
 
 Netcup says offline refresh tokens must be used at least once every 30 days to stay valid. The SDK does not run a background keepalive.
 
@@ -234,6 +236,20 @@ Default SCP authentication URL: `https://servercontrolpanel.de/realms/scp/protoc
 Default CCP API URL: `https://api.netcup.com`.
 
 Only override those URLs with endpoints you trust: the SDK sends credentials to them.
+
+## Use with an AI client
+
+The same package provides a read-only MCP mode:
+
+```sh
+npx --yes netcup-sdk@1.0.0 mcp
+```
+
+The AI client starts and owns this local stdio process, which exchanges messages through its input and output streams. Run the matching SCP `login` or `ccp login` outside the client first, or supply matching environment credentials. MCP reuses the CLI's existing plaintext files and environment precedence. It never starts an interactive login.
+
+MCP exposes nine fixed tools with selected safe fields, not every SDK method or raw API output. It has no write, auth, shell, local file-read or arbitrary HTTP tools. Imports remain free of CLI and MCP startup side effects. Standard `bunx netcup-sdk@1.0.0 mcp` uses Node and requires the same Node minimum.
+
+See the [client setup and privacy limits](../README.md#use-with-an-ai-client). Normal CLI JSON output is unchanged; MCP reserves stdout for protocol messages.
 
 ## Development
 
