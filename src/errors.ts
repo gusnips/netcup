@@ -6,15 +6,19 @@ export class NetcupError extends Error {
   readonly status: number;
   readonly body: unknown;
 
-  constructor(status: number, body: unknown) {
-    const details = Array.isArray(body) ? body : [body];
+  constructor(status: number, body: unknown, message?: string) {
+    const details = [
+      ...(Array.isArray(body) ? body : [body]),
+      ...(isRecord(body) && Array.isArray(body.errors) ? body.errors : []),
+    ];
     const messages = details
       .filter(isRecord)
       .map((item) => item.message)
       .filter((message): message is string => typeof message === "string");
     super(
-      messages.join("; ") ||
-        `Netcup request failed (HTTP ${status}). Check the request and your access token.`,
+      message ??
+        (messages.join("; ") ||
+          `Netcup request failed (HTTP ${status}). Check the request and your credentials.`),
     );
     this.name = "NetcupError";
     this.status = status;
