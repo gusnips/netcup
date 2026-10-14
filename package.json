@@ -1,8 +1,8 @@
 {
   "name": "netcup-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "packageManager": "bun@1.4.2",
-  "description": "Manage Netcup servers from JavaScript or TypeScript with the SCP REST API",
+  "description": "Manage Netcup servers from the command line or JavaScript with the SCP REST API",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -16,16 +16,30 @@
         "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
       }
+    },
+    "./cli": {
+      "import": {
+        "types": "./dist/cli.d.mts",
+        "default": "./dist/cli.mjs"
+      },
+      "require": {
+        "types": "./dist/cli.d.ts",
+        "default": "./dist/cli.js"
+      }
     }
   },
+  "bin": {
+    "netcup": "bin/cli.js"
+  },
   "files": [
+    "bin",
     "dist",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "generate": "openapi-typescript openapi.json -o src/schema.d.ts && prettier --write src/schema.d.ts",
-    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "build": "tsup src/index.ts src/cli.ts --format cjs,esm --dts --clean",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "format": "prettier --write .",
@@ -51,7 +65,7 @@
   },
   "homepage": "https://github.com/gusnips/netcup#readme",
   "engines": {
-    "node": ">=18"
+    "node": ">=18.3.0"
   },
   "publishConfig": {
     "access": "public"
