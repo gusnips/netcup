@@ -6,7 +6,7 @@ Checked on 2026-10-13. Authentication and implementation notes updated on 2026-1
 
 The separate `ccp` group uses the current domain and DNS API, not the older DNS API used by community clients. Server Control Panel (SCP) commands and credentials remain separate.
 
-MCP support stays in v2. An MCP client should be able to launch the package through npx when needed. That still starts a local process; it does not require a separately managed server.
+MCP support stays in v2. The [MCP research](mcp-research.md) covers a proposed npx/bunx setup. The client would start a local process, without a separately managed server.
 
 ## Current domain and DNS API
 
@@ -79,4 +79,4 @@ If legacy support is needed, expose it explicitly rather than silently switching
 
 ## Scope limits
 
-The initial research added no runtime code. The next implementation adds the current CCP client and CLI; legacy APIs and MCP remain out of scope. No real account login, DNS change or server mutation was performed. The reference repositories were read, not installed or run.
+The current CCP client and CLI shipped in `netcup-sdk@0.3.0` and `@gusnips/netcup@1.2.0`. Legacy APIs and MCP remain out of scope for that release. No real account login, DNS change or server mutation was performed. The reference repositories were read, not installed or run.

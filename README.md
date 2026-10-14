@@ -179,7 +179,7 @@ The SDK covers 86 current SCP operations and all 17 operations in the checked-in
 
 [Read the SDK guide](https://github.com/gusnips/netcup/blob/main/docs/sdk.md).
 
-Server ordering, invoices, the legacy CCP JSON API and MCP are not included.
+Server ordering, invoices, the legacy CCP JSON API and MCP are not included. See the [MCP research](https://github.com/gusnips/netcup/blob/main/docs/mcp-research.md) for the proposed setup.
 
 ## Development
 
