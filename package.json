@@ -1,8 +1,8 @@
 {
   "name": "netcup-sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "packageManager": "bun@1.4.2",
-  "description": "Manage Netcup servers from the command line or JavaScript with the SCP REST API",
+  "description": "Netcup CLI and typed JavaScript client for server and DNS management",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -49,6 +49,8 @@
   "keywords": [
     "netcup",
     "scp",
+    "ccp",
+    "dns",
     "server",
     "vps",
     "api-client",

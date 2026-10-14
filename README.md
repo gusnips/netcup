@@ -1,34 +1,37 @@
 # netcup-sdk
 
-Manage Netcup servers from your terminal.
+Manage Netcup servers and DNS from your terminal.
 
 ```sh
-npx netcup-sdk servers get 12345
+npx netcup-sdk --help
 ```
 
-This prints one server's details as JSON. Sign in first with `npx netcup-sdk login`.
-
-Unofficial tool for Netcup's Server Control Panel API. Requires Node.js 18.3 or newer, or Bun. It manages existing servers, not server orders or customer/DNS settings.
+Unofficial CLI and JavaScript client. Requires Node.js 18.3 or newer, or Bun. Server commands use the Server Control Panel (SCP). Domain and DNS commands use the current Customer Control Panel (CCP) API for CloudDNS. They do not use Netcup's legacy DNS API.
 
 ## Start
+
+For servers:
 
 ```sh
 npx netcup-sdk login
 npx netcup-sdk servers list
 ```
 
-Login shows a link and a code. Open the link in your browser, sign in to Netcup and approve access. The command waits for approval and saves a refresh token so you do not need to sign in for every call.
+Open the login link in your browser, sign in to Netcup and approve the code. The command saves a refresh token so you do not need to approve every call.
 
-Bun works too:
+For domains and DNS:
 
 ```sh
-bunx netcup-sdk login
-bunx netcup-sdk servers list
+npx netcup-sdk ccp login
+npx netcup-sdk ccp domains list
 ```
 
-The scoped package runs the same command:
+Create an API key in **CCP > Master Data > API**, then paste it at the hidden prompt. The command checks the key before saving it. This key is separate from your SCP server login.
+
+Bun and the scoped package work too:
 
 ```sh
+bunx netcup-sdk ccp domains list
 npx @gusnips/netcup --help
 bunx @gusnips/netcup servers list
 ```
@@ -40,16 +43,16 @@ npm install --global netcup-sdk
 netcup --help
 ```
 
-Or use `bun add --global netcup-sdk`. Choose either `netcup-sdk` or `@gusnips/netcup` for a global install, not both: they provide the same `netcup` command. Do not confuse them with the unrelated npm package named `netcup`.
+Or use `bun add --global netcup-sdk`. Choose `netcup-sdk` or `@gusnips/netcup` for a global install, not both: they provide the same command. The unrelated npm package named `netcup` is not this tool.
 
-## Commands
+## Server commands
 
 Run `netcup GROUP --help` for arguments and examples.
 
 | Group       | Commands                                                             |
 | ----------- | -------------------------------------------------------------------- |
-| `login`     | Approve access in your browser and save it                           |
-| `logout`    | Revoke the saved login and remove its file                           |
+| `login`     | Approve server access in your browser and save it                    |
+| `logout`    | Revoke the saved server login and remove its file                    |
 | `auth`      | `status`                                                             |
 | `servers`   | `list`, `get`, `start`, `stop`, `reboot`, `update`, `logs`, `rescue` |
 | `snapshots` | `list`, `get`, `create`, `delete`, `export`, `revert`, `dry-run`     |
@@ -67,69 +70,116 @@ netcup tasks list
 netcup metrics cpu 12345 --hours 24
 ```
 
-Server updates accept one of `--nickname` or `--hostname` per call. Other settings, image uploads, firewall writes and advanced API operations are available through the [JavaScript SDK](https://github.com/gusnips/netcup/blob/main/docs/sdk.md). The CLI does not expose all SDK methods.
+Server updates accept one of `--nickname` or `--hostname` per call. Firewall writes, image uploads and other advanced calls are available through the [SDK](https://github.com/gusnips/netcup/blob/main/docs/sdk.md).
 
-### Actions that can interrupt service
+Stop, reboot, rescue-mode changes, task cancellation and snapshot deletion/restoration ask for confirmation. Scripts must pass `--yes`. `reboot` is a hard reset, not a graceful operating-system reboot. Unsaved data may be lost. `snapshots revert` replaces disk data.
 
-Stop, reboot, rescue-mode changes, task cancellation and snapshot deletion/restoration ask for confirmation. Scripts must pass `--yes`; otherwise the command exits without sending a request.
+A returned task means Netcup accepted work, not that it finished. Check it with `netcup tasks get TASK_ID`.
 
-`reboot` is a hard reset, not a graceful operating-system reboot. Unsaved data may be lost. `snapshots revert` replaces disk data and discards changes made after the snapshot.
+## Domains and DNS
 
-Only run this if you intend to reset that server:
+Run `netcup ccp --help` for the full syntax.
+
+| Command                                         | What it does                                             |
+| ----------------------------------------------- | -------------------------------------------------------- |
+| `ccp login`                                     | Check and save an API key using hidden input             |
+| `ccp logout`                                    | Remove only the local key, without revoking it at Netcup |
+| `ccp auth status`                               | Check the configured key with a read-only request        |
+| `ccp domains list`                              | List domains, with name/ID filters and page/sort options |
+| `ccp dns types`                                 | Read supported record types without a key                |
+| `ccp dns revisions DOMAIN_ID`                   | List a domain's DNS revisions                            |
+| `ccp dns records DOMAIN_ID REVISION_UUID`       | Read records in an exact revision                        |
+| `ccp dns prepare DOMAIN_ID --file CHANGES.json` | Submit changes with automatic commit disabled            |
+| `ccp dns review DOMAIN_ID REVISION_UUID`        | Read that revision and its records                       |
+| `ccp dns commit DOMAIN_ID REVISION_UUID`        | Show the revision again, then ask before publishing it   |
+
+Find a domain by name:
 
 ```sh
-netcup servers reboot 12345 --yes
+netcup ccp domains list --fqdn example.com
 ```
 
-A returned task means Netcup accepted the work, not that it finished. Check it with `netcup tasks get TASK_ID`. The CLI does not retry changes automatically. Ctrl-C stops local waiting; a request already accepted by Netcup may still run.
+Domain and revision lists use `--page` and `--per-page`, starting at 1. Domain filters are `--fqdn` and `--domain-id`. Use `--field fqdn --direction asc` to sort domains. Domain IDs are not SCP server IDs.
+
+### Prepare, review and publish
+
+These steps send DNS changes to Netcup. Use the domain ID from `ccp domains list`, not a server ID. Back up the records you need before publishing a change.
+
+Save this example as `changes.json`. Replace `192.0.2.10` with the intended IP; it is an example address, not a working server.
+
+```json
+{
+  "create": [{ "name": "www", "type": "A", "rdata": "192.0.2.10", "ttl": 300 }]
+}
+```
+
+`name` is relative to the domain; use `@` for the domain itself. `rdata` is the record's value. `ttl` is how many seconds a DNS resolver may cache it. MX and SRV priority belongs inside `rdata`, not in another field.
+
+```sh
+netcup ccp dns prepare DOMAIN_ID --file changes.json
+netcup ccp dns review DOMAIN_ID REVISION_UUID
+netcup ccp dns commit DOMAIN_ID REVISION_UUID
+```
+
+Replace `REVISION_UUID` with the identifier returned by prepare. There is no `latest` or `current` shortcut. To remove a record, put its full `name`, `type`, `rdata` and `ttl` in a `delete` array. A record ID alone is not valid change-set input.
+
+Prepare sends `autoCommit: false` and `strict: true`; the file cannot override them. It is a remote write, not a dry run, and requires confirmation or `--yes`. It does not call the commit endpoint.
+
+Commit reads the exact revision and its records again and prints the preview on stderr before asking for approval. `--yes` skips the prompt, not the preview. Review shows Netcup's responses, not a local before/after diff. If metadata says records are missing from the response, review and commit stop; Netcup documents no paging controls for that record-list endpoint.
+
+Netcup does not document an atomic check for edits made after review. Avoid changing the same revision in another client while publishing. A successful response does not confirm that every DNS resolver is serving the new records.
+
+Neither the CLI nor SDK retries changes automatically. If a change request fails or you cancel after sending it, check the control panel before trying it again.
 
 ## JSON and scripts
 
-Results go to stdout as JSON. Progress, approval instructions, prompts and errors go to stderr. `--compact` prints one-line JSON. An empty successful response prints `null`.
+Results go to stdout as JSON. Progress, previews, prompts and errors go to stderr. `--compact` prints one-line JSON. An empty successful response prints `null`. Known credentials are hidden from output.
 
-```sh
-netcup servers list --limit 20 --offset 0 --compact
-```
+SCP lists use `--limit` and `--offset`, not CCP's page numbers. Repeat `--sort` for multiple SCP fields, for example `--sort=name --sort=-nickname`. Lists return one page. CCP output keeps its `result`, `meta`, `messages` and `errors` fields so page information and warnings are not lost.
 
-Lists return one page, not every page. Use `--limit` and `--offset` to request another page. Repeat `--sort` for multiple fields, for example `--sort=name --sort=-nickname`.
+Exit codes: `0` for success or help, `1` for an API/login/storage failure, `2` for invalid arguments or a refused action, `130` for cancellation. Ctrl-C stops local waiting; a request already sent may still run.
 
-Exit codes: `0` for success or help, `1` for an API/login/storage failure, `2` for invalid arguments or a refused action, `130` for cancellation.
+For scripts:
 
-For scripts, set either `NETCUP_ACCESS_TOKEN` or `NETCUP_REFRESH_TOKEN`, not both. Environment credentials take precedence over the saved login and are not written to disk. Keep tokens out of command arguments and source control. Access tokens expire; refresh tokens let the SDK obtain new ones.
+- Servers: set either `NETCUP_ACCESS_TOKEN` or `NETCUP_REFRESH_TOKEN`, not both.
+- Domains/DNS: set `NETCUP_CCP_API_KEY`. SCP tokens do not work here.
 
-## Saved login
+Environment credentials take precedence over the matching saved login and are not written to disk. Keep them out of command arguments and source control. A CCP command does not refresh or use your SCP login.
 
-The CLI stores only the refresh token in a plaintext file:
+## Saved credentials
 
-- Linux/macOS: `$XDG_CONFIG_HOME/netcup-sdk/credentials.json`, or `~/.config/netcup-sdk/credentials.json`.
-- Windows: `%APPDATA%/netcup-sdk/credentials.json`.
+Files are plaintext in the `netcup-sdk` config folder:
 
-On Unix, the folder has mode `0700` and the file `0600`, so only its owner can read them. The CLI checks ownership and permissions, then updates the file atomically when tokens change. It refuses to overwrite a login another command has replaced.
+- Linux/macOS: `$XDG_CONFIG_HOME/netcup-sdk`, or `~/.config/netcup-sdk`.
+- Windows: `%APPDATA%/netcup-sdk`.
 
-A killed process can leave `.credentials.lock` behind. Retry first. Remove the named lock file only after checking that no Netcup command is running.
+`credentials.json` contains the SCP refresh token. `ccp-credentials.json` contains the separate CCP API key. On Unix, the folder has mode `0700` and files `0600`. The CLI checks ownership and permissions, writes atomically and refuses to overwrite credentials another command has replaced.
 
-```sh
-netcup auth status
-netcup logout
-```
+A killed process can leave `.credentials.lock` or `.ccp-credentials.lock` behind. Retry first. Remove the named lock only after checking that no Netcup command is updating that file.
 
-Logout revokes access before removing the saved file. If Netcup cannot be reached, the file stays. `netcup logout --local` removes only the local file, without revoking access. Unset environment credentials before logging out of the saved account; the CLI cannot unset variables in your shell.
+`netcup logout` revokes the saved SCP login before removing it. If revocation fails, the file stays. `netcup logout --local` removes only that file, without revoking access.
 
-Netcup says offline refresh tokens must be used at least once every 30 days to stay valid. The CLI does not run a background keepalive.
+`netcup ccp logout` removes only the saved CCP key. To revoke the key, delete it in **CCP > Master Data > API**. Unset the matching environment variables before local logout; the CLI cannot unset variables in your shell.
 
-Only if you use endpoints you trust, `NETCUP_BASE_URL` and `NETCUP_AUTH_URL` can override the API and authentication URLs. Credentials are sent to those endpoints.
+Netcup says offline SCP refresh tokens must be used at least once every 30 days to stay valid. The CLI does not run a background keepalive.
+
+Only override endpoints you trust: `NETCUP_BASE_URL` and `NETCUP_AUTH_URL` control SCP endpoints; `NETCUP_CCP_BASE_URL` controls the current CCP API. Your credentials are sent to those endpoints.
 
 ## JavaScript and TypeScript
 
-The same package also exports `NetcupClient`, `NetcupAuth`, error classes and generated types. Existing CommonJS and ESM imports still work. The SDK covers all 86 current API operations.
+The package also exports typed clients. CommonJS and ESM imports work under either package name.
 
 ```ts
 import { NetcupClient } from "netcup-sdk";
-const netcup = new NetcupClient(process.env.NETCUP_ACCESS_TOKEN!);
+const netcup = new NetcupClient("your-scp-access-token");
 const server = await netcup.servers.get(12345);
 ```
 
+The SDK covers 86 current SCP operations and all 17 operations in the checked-in CCP specification, including DNS revision/record methods and ACME certificate challenges. The CLI exposes the commands listed above, not every SDK method.
+
 [Read the SDK guide](https://github.com/gusnips/netcup/blob/main/docs/sdk.md).
+
+Server ordering, invoices, the legacy CCP JSON API and MCP are not included.
 
 ## Development
 
@@ -138,11 +188,12 @@ bun install
 bun run lint
 bun run typecheck
 bun run build
+bun test src/ccp.test.ts
 bun test src/cli.test.ts
 ```
 
-Tests use mocked requests and temporary login folders, not live servers. CI only typechecks ready PRs; it does not run tests or publish. `bun run generate` updates the types from the checked-in `openapi.json`.
+Tests use mocked requests and temporary config folders, not live accounts. CI only typechecks ready PRs; it does not run tests or publish. `bun run generate` reads `openapi.json` for SCP and `openapi-ccp.json` for CCP.
 
-[Netcup API docs](https://www.netcup.com/en/helpcenter/documentation/servercontrolpanel/api)
+[Server API docs](https://www.netcup.com/en/helpcenter/documentation/server/rest-api) · [Current CCP API docs](https://www.netcup.com/en/helpcenter/documentation/netcup-api)
 
 MIT license. Not affiliated with Netcup.
