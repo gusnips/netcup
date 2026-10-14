@@ -5,10 +5,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { isRecord } from "./errors";
 
-export interface SavedCredentials {
-  refreshToken: string;
-}
-
 class CredentialStoreError extends Error {}
 
 const unix = process.platform !== "win32";
@@ -16,17 +12,27 @@ const unix = process.platform !== "win32";
 export class CredentialStore {
   readonly path: string;
   private readonly directory: string;
+  private readonly name: string;
+  private readonly field: "refreshToken" | "apiKey";
+  private readonly loginCommand: string;
 
-  constructor(env: Record<string, string | undefined> = process.env) {
+  constructor(
+    env: Record<string, string | undefined> = process.env,
+    namespace: "scp" | "ccp" = "scp",
+  ) {
     const home = env.HOME || env.USERPROFILE || homedir();
     const base = unix
       ? env.XDG_CONFIG_HOME || join(home, ".config")
       : env.APPDATA || join(env.USERPROFILE || home, "AppData", "Roaming");
     this.directory = join(base, "netcup-sdk");
-    this.path = join(this.directory, "credentials.json");
+    this.name = namespace === "scp" ? "credentials" : "ccp-credentials";
+    this.field = namespace === "scp" ? "refreshToken" : "apiKey";
+    this.loginCommand =
+      namespace === "scp" ? "netcup login" : "netcup ccp login";
+    this.path = join(this.directory, `${this.name}.json`);
   }
 
-  async read(): Promise<SavedCredentials | undefined> {
+  async read(): Promise<string | undefined> {
     try {
       if (!(await this.checkDirectory(false))) return undefined;
       this.check(await lstat(this.path), this.path, false);
@@ -49,41 +55,40 @@ export class CredentialStore {
       } catch {
         throw this.invalidFile();
       }
-      if (
-        !isRecord(value) ||
-        Object.keys(value).length !== 1 ||
-        typeof value.refreshToken !== "string" ||
-        !value.refreshToken.trim()
-      ) {
+      if (!isRecord(value) || Object.keys(value).length !== 1) {
         throw this.invalidFile();
       }
-      return { refreshToken: value.refreshToken };
+      const secret = value[this.field];
+      if (typeof secret !== "string" || !secret.trim()) {
+        throw this.invalidFile();
+      }
+      return secret;
     } catch (error) {
       if (isRecord(error) && error.code === "ENOENT") return undefined;
       throw this.sanitize(error, "read");
     }
   }
 
-  async save(
-    refreshToken: string,
-    expectedRefreshToken: string | null,
-  ): Promise<void> {
-    if (typeof refreshToken !== "string" || !refreshToken.trim()) {
+  async save(secret: string, expectedSecret: string | null): Promise<void> {
+    if (typeof secret !== "string" || !secret.trim()) {
       throw new CredentialStoreError(
-        "Cannot save an empty refresh token. Run netcup login again.",
+        `Cannot save an empty ${this.field === "refreshToken" ? "refresh token" : "API key"}. Run ${this.loginCommand} again.`,
       );
     }
     await this.withLock(true, async () => {
-      this.compare(await this.read(), expectedRefreshToken);
+      this.compare(await this.read(), expectedSecret);
       const temporaryPath = join(
         this.directory,
-        `.credentials.${randomUUID()}.tmp`,
+        `.${this.name}.${randomUUID()}.tmp`,
       );
       const file = await open(temporaryPath, "wx", 0o600);
       let renamed = false;
       try {
         try {
-          await file.writeFile(`${JSON.stringify({ refreshToken })}\n`, "utf8");
+          await file.writeFile(
+            `${JSON.stringify({ [this.field]: secret })}\n`,
+            "utf8",
+          );
           await file.sync();
         } finally {
           await file.close();
@@ -96,20 +101,20 @@ export class CredentialStore {
     });
   }
 
-  async remove(expectedRefreshToken: string): Promise<void> {
+  async remove(expectedSecret: string): Promise<void> {
     await this.withLock(false, async () => {
       const current = await this.read();
-      if (!current) return;
-      this.compare(current, expectedRefreshToken);
+      if (current === undefined) return;
+      this.compare(current, expectedSecret);
       await unlink(this.path);
     });
   }
 
   private compare(
-    current: SavedCredentials | undefined,
-    expectedRefreshToken: string | null,
+    current: string | undefined,
+    expectedSecret: string | null,
   ): void {
-    if ((current?.refreshToken ?? null) !== expectedRefreshToken) {
+    if ((current ?? null) !== expectedSecret) {
       throw new CredentialStoreError(
         `The saved login at ${this.path} changed in another command. Nothing was overwritten. Retry your command to use the current login.`,
       );
@@ -135,7 +140,7 @@ export class CredentialStore {
       (directory ? !info.isDirectory() : !info.isFile())
     ) {
       throw new CredentialStoreError(
-        `${path} must be a real ${directory ? "folder" : "file"}, not a link or another file type. Move it aside and run netcup login again.`,
+        `${path} must be a real ${directory ? "folder" : "file"}, not a link or another file type. Move it aside and run ${this.loginCommand} again.`,
       );
     }
     if (unix && process.getuid && info.uid !== process.getuid()) {
@@ -154,7 +159,7 @@ export class CredentialStore {
     createDirectory: boolean,
     change: () => Promise<void>,
   ): Promise<void> {
-    const lockPath = join(this.directory, ".credentials.lock");
+    const lockPath = join(this.directory, `.${this.name}.lock`);
     try {
       if (!(await this.checkDirectory(createDirectory))) return;
       const lock = await open(lockPath, "wx", 0o600).catch((error: unknown) => {
@@ -182,7 +187,7 @@ export class CredentialStore {
 
   private invalidFile(): Error {
     return new CredentialStoreError(
-      `The credentials file at ${this.path} is not valid. Remove that file and run netcup login again.`,
+      `The credentials file at ${this.path} is not valid. Remove that file and run ${this.loginCommand} again.`,
     );
   }
 

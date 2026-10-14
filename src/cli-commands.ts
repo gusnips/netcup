@@ -18,6 +18,13 @@ export interface CommandOptions {
   online?: boolean;
   offline?: boolean;
   hours?: string;
+  fqdn?: string;
+  "domain-id"?: string;
+  page?: string;
+  "per-page"?: string;
+  field?: string;
+  direction?: string;
+  file?: string;
   yes?: boolean;
   help?: boolean;
   version?: boolean;
@@ -27,6 +34,7 @@ export interface CommandOptions {
 export interface CliCommand {
   label: string;
   execute(client: NetcupClient): Promise<unknown>;
+  preview?(client: NetcupClient): Promise<unknown>;
   confirmation?: string;
   emptyMessage?: string;
   mutation?: boolean;
@@ -65,7 +73,7 @@ function fail(message: string, usage: string): never {
   throw new CliUsageError(`${message}\nUsage: ${usage}`);
 }
 
-function validateArgs(
+export function validateArgs(
   args: string[],
   options: CommandOptions,
   usage: string,
@@ -97,7 +105,7 @@ function validateArgs(
   }
 }
 
-function integer(
+export function integer(
   value: string,
   label: string,
   minimum: number,
