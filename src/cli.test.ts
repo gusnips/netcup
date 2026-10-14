@@ -476,6 +476,30 @@ describe("CLI login and credentials", () => {
     expect(await cli.store.read()).toBe(tokens.refresh_token);
   });
 
+  test("canceling after a refresh response saves rotation without a resource request", async () => {
+    const controller = new AbortController();
+    const cli = await setup((request) => {
+      if (!request.url.endsWith("/token"))
+        throw new Error("A canceled read must not reach the resource API");
+      const response = json(tokens);
+      const readText = response.text.bind(response);
+      response.text = async () => {
+        const body = await readText();
+        controller.abort();
+        return body;
+      };
+      return response;
+    });
+    await cli.store.save("previous-refresh", null);
+    cli.context.signal = controller.signal;
+    expect(await cli.run(["servers", "list"])).toBe(130);
+    expect(await cli.store.read()).toBe(tokens.refresh_token);
+    expect(cli.requests).toHaveLength(1);
+    expect(cli.requests[0].url.endsWith("/token")).toBe(true);
+    expect(cli.output).toEqual([]);
+    expect(cli.errors.join("")).not.toContain(tokens.refresh_token);
+  });
+
   test("environment refresh tokens are not written to disk", async () => {
     const cli = await setup((request) =>
       request.url.endsWith("/token") ? json(tokens) : json([]),

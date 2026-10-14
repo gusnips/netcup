@@ -222,7 +222,8 @@ export class NetcupAuth {
         body.refresh_expires_in === 0 ? 0 : seconds(body.refresh_expires_in);
     }
     this.currentRefreshToken = tokens.refresh_token;
-    this.cached = {
+    this.cached = undefined;
+    const cached = {
       token: tokens.access_token,
       expiresAt: Date.now() + Math.max(0, tokens.expires_in - 30) * 1000,
     };
@@ -235,6 +236,7 @@ export class NetcupAuth {
       );
     }
     this.checkSession(generation);
+    this.cached = cached;
     return tokens;
   }
 

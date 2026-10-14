@@ -1,13 +1,20 @@
 import { parseArgs } from "node:util";
 import { version } from "../package.json";
 import { NetcupAuth } from "./auth";
-import type { NetcupFetch, NetcupTokens } from "./auth";
+import type { NetcupFetch } from "./auth";
 import { NetcupClient } from "./client";
 import { CredentialStore } from "./credentials";
 import { CliUsageError, commandHelp, resolveCommand } from "./cli-commands";
 import type { CliCommand } from "./cli-commands";
 import { ccpCommandHelp, resolveCcpCommand } from "./cli-ccp-commands";
 import { CliCanceledError, confirmAction, promptSecret } from "./cli-prompts";
+import {
+  apiKey,
+  loadCcpKey,
+  loadScpAuth,
+  scpEnvironment,
+} from "./cli-credentials";
+import { createRedactor, terminalSafe } from "./cli-output";
 import { isRecord, NetcupAuthError, NetcupError } from "./errors";
 
 export interface CliContext {
@@ -95,38 +102,6 @@ function ccpAuthenticationError(error: NetcupError): boolean {
   );
 }
 
-function apiKey(value: string): string {
-  const key = value.trim();
-  if (!key || !/^[!-~]+$/.test(key)) {
-    throw new CliUsageError(
-      "The CCP API key is empty or contains spaces, line breaks or unsupported characters. Copy it again from CCP > Master Data > API.",
-    );
-  }
-  return key;
-}
-
-function terminalSafe(text: string): string {
-  return text.replace(/\p{Cc}/gu, (character) =>
-    character === "\n" || character === "\t"
-      ? character
-      : `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
-}
-
-function redactJson(value: unknown, redact: (text: string) => string): unknown {
-  if (typeof value === "string") return redact(value);
-  if (Array.isArray(value))
-    return value.map((item) => redactJson(item, redact));
-  if (isRecord(value))
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        redact(key),
-        redactJson(item, redact),
-      ]),
-    );
-  return value;
-}
-
 export async function runCli(
   args: string[],
   context: CliContext = {},
@@ -142,38 +117,15 @@ export async function runCli(
     ((text: string) => {
       process.stderr.write(text);
     });
-  const secrets = new Set<string>();
-  const rememberSecret = (value: string | undefined | null): void => {
-    if (!value) return;
-    for (const secret of [
-      value,
-      value.trim(),
-      JSON.stringify(value.trim()).slice(1, -1),
-    ])
-      if (secret) secrets.add(secret);
-  };
-  for (const value of [
-    env.NETCUP_ACCESS_TOKEN,
-    env.NETCUP_REFRESH_TOKEN,
-    env.NETCUP_CCP_API_KEY,
-  ])
-    rememberSecret(value);
-  const redact = (text: string): string => {
-    for (const secret of [...secrets].sort((a, b) => b.length - a.length))
-      text = text.split(secret).join("[redacted]");
-    return text;
-  };
+  const secrets = createRedactor(env);
+  const { rememberSecret, rememberTokens, redact, redactJson } = secrets;
   const err = (text: string): void => {
     writeError(terminalSafe(redact(text)));
-  };
-  const rememberTokens = (tokens: NetcupTokens): void => {
-    rememberSecret(tokens.access_token);
-    rememberSecret(tokens.refresh_token);
   };
   const json = (value: unknown, compact?: boolean): void => {
     out(
       terminalSafe(
-        `${JSON.stringify(redactJson(value ?? null, redact), null, compact ? undefined : 2)}\n`,
+        `${JSON.stringify(redactJson(value ?? null), null, compact ? undefined : 2)}\n`,
       ),
     );
   };
@@ -345,16 +297,9 @@ export async function runCli(
       }
       const publicTypes =
         commandArgs[0] === "dns" && commandArgs[1] === "types";
-      let key: string | undefined;
-      if (!publicTypes) {
-        key = environmentKey || (await store.read());
-        rememberSecret(key);
-        if (!key)
-          throw new Error(
-            "No CCP key was found. Run netcup ccp login, or set NETCUP_CCP_API_KEY for a script.",
-          );
-        key = apiKey(key);
-      }
+      const key = publicTypes
+        ? undefined
+        : await loadCcpKey(env, rememberSecret);
       client = createClient(key);
       if (status) {
         err("Checking the CCP API key...\n");
@@ -402,22 +347,8 @@ export async function runCli(
         json({ authenticated: true }, values.compact);
         return 0;
       }
-      const accessToken = env.NETCUP_ACCESS_TOKEN?.trim();
-      const refreshToken = env.NETCUP_REFRESH_TOKEN?.trim();
-      for (const [name, token] of [
-        ["NETCUP_ACCESS_TOKEN", accessToken],
-        ["NETCUP_REFRESH_TOKEN", refreshToken],
-      ]) {
-        if (token && !/^[!-~]+$/.test(token))
-          throw new CliUsageError(
-            `${name} contains spaces, line breaks or unsupported characters. Copy it again, or unset it and run netcup login.`,
-          );
-      }
-      if (accessToken && refreshToken)
-        throw new CliUsageError(
-          "Both NETCUP_ACCESS_TOKEN and NETCUP_REFRESH_TOKEN are set. Unset one before running this command.",
-        );
       if (logout) {
+        const { accessToken, refreshToken } = scpEnvironment(env);
         if (accessToken || refreshToken)
           throw new CliUsageError(
             "Environment credentials are active. Unset NETCUP_ACCESS_TOKEN and NETCUP_REFRESH_TOKEN before logging out of the saved account.",
@@ -451,32 +382,10 @@ export async function runCli(
         json({ authenticated: false, revoked: !values.local }, values.compact);
         return 0;
       }
-      if (accessToken) client = new NetcupClient({ ...common, accessToken });
-      else if (refreshToken)
-        client = new NetcupClient({
-          ...common,
-          refreshToken,
-          onTokens: rememberTokens,
-        });
-      else {
-        const saved = await store.read();
-        if (!saved)
-          throw new Error(
-            "No login was found. Run netcup login, or set NETCUP_ACCESS_TOKEN or NETCUP_REFRESH_TOKEN for a script.",
-          );
-        rememberSecret(saved);
-        let previous = saved;
-        client = new NetcupClient({
-          ...common,
-          refreshToken: previous,
-          onTokens: async (tokens) => {
-            rememberTokens(tokens);
-            context.signal?.throwIfAborted();
-            await store.save(tokens.refresh_token, previous);
-            previous = tokens.refresh_token;
-          },
-        });
-      }
+      client = new NetcupClient({
+        ...common,
+        ...(await loadScpAuth(env, secrets)),
+      });
       if (status) {
         err("Checking the signed-in account...\n");
         json(
@@ -495,7 +404,7 @@ export async function runCli(
     err(`${command.label}\n`);
     if (command.preview) {
       const preview = await command.preview(client);
-      err(`${JSON.stringify(redactJson(preview, redact), null, 2)}\n`);
+      err(`${JSON.stringify(redactJson(preview), null, 2)}\n`);
       if (
         command.confirmation &&
         !values.yes &&
