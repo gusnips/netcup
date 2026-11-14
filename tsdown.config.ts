@@ -7,5 +7,7 @@ export default defineConfig({
   dts: true,
   target: "es2020",
   outExtensions: ({ format }) =>
-    format === "cjs" ? { js: ".js", dts: ".d.ts" } : { js: ".mjs", dts: ".d.mts" },
+    format === "cjs"
+      ? { js: ".js", dts: ".d.ts" }
+      : { js: ".mjs", dts: ".d.mts" },
 });

@@ -38,11 +38,12 @@
     "LICENSE"
   ],
   "scripts": {
-    "generate": "npx -y -p typescript@5.9.3 -p openapi-typescript@7.13.0 openapi-typescript openapi.json -o src/schema.d.ts && npx -y -p typescript@5.9.3 -p openapi-typescript@7.13.0 openapi-typescript openapi-ccp.json -o src/ccp-schema.d.ts && prettier --write src/schema.d.ts src/ccp-schema.d.ts",
+    "generate": "npx -y -p typescript@5.9.3 -p openapi-typescript@7.13.0 openapi-typescript openapi.json -o src/schema.d.ts && npx -y -p typescript@5.9.3 -p openapi-typescript@7.13.0 openapi-typescript openapi-ccp.json -o src/ccp-schema.d.ts && oxfmt src/schema.d.ts src/ccp-schema.d.ts",
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src",
-    "format": "prettier --write .",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
     "test": "bun test",
     "prepublishOnly": "bun run lint && bun run typecheck && bun run build"
   },
@@ -83,8 +84,8 @@
     "@modelcontextprotocol/client": "2.3.1",
     "@types/bun": "^1.4.2",
     "@types/node": "^26.6.5",
+    "oxfmt": "0.78.0",
     "oxlint": "1.93.0",
-    "prettier": "^3.9.10",
     "tsdown": "^0.23.7",
     "typescript": "^7.0.2"
   }
