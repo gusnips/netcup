@@ -38,8 +38,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "generate": "openapi-typescript openapi.json -o src/schema.d.ts && openapi-typescript openapi-ccp.json -o src/ccp-schema.d.ts && prettier --write src/schema.d.ts src/ccp-schema.d.ts",
-    "build": "tsup src/index.ts src/cli.ts --format cjs,esm --dts --clean",
+    "generate": "npx -y -p typescript@5.9.3 -p openapi-typescript@7.13.0 openapi-typescript openapi.json -o src/schema.d.ts && npx -y -p typescript@5.9.3 -p openapi-typescript@7.13.0 openapi-typescript openapi-ccp.json -o src/ccp-schema.d.ts && prettier --write src/schema.d.ts src/ccp-schema.d.ts",
+    "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "format": "prettier --write .",
@@ -84,10 +84,9 @@
     "@types/bun": "^1.4.2",
     "@types/node": "^26.6.5",
     "eslint": "^10.12.0",
-    "openapi-typescript": "7.13.0",
     "prettier": "^3.9.10",
-    "tsup": "^8.5.1",
-    "typescript": "^5.9.3",
+    "tsdown": "^0.23.7",
+    "typescript": "^7.0.2",
     "typescript-eslint": "^8.71.1"
   }
 }
