@@ -259,12 +259,15 @@ Server ordering, invoices and the legacy CCP JSON API are not included. MCP is l
 ```sh
 bun install
 bun run lint
+bun run format:check
 bun run typecheck
 bun run build
 bun test src/mcp.test.ts
 ```
 
-Run only the test file you change. Tests use mocked requests and temporary config folders, not live accounts. CI only typechecks ready PRs; it does not run tests or publish. `bun run generate` reads `openapi.json` for SCP and `openapi-ccp.json` for CCP.
+The repo uses TypeScript 7, oxlint and oxfmt. `bun run build` uses tsdown.
+
+Run only the test file you change. Tests use mocked requests and temporary config folders, not live accounts. CI only typechecks ready PRs; it does not run tests or publish. `bun run generate` reads `openapi.json` for SCP and `openapi-ccp.json` for CCP. It runs openapi-typescript with TypeScript 5.9.3 in a temporary `npx` install, because openapi-typescript does not work on TypeScript 7 yet.
 
 [Server API docs](https://www.netcup.com/en/helpcenter/documentation/server/rest-api) · [Current CCP API docs](https://www.netcup.com/en/helpcenter/documentation/netcup-api)
 
